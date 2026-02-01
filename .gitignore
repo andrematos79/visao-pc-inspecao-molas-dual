@@ -1,0 +1,26 @@
+# Ambiente virtual
+venv/
+.venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Streamlit
+.streamlit/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Dados (recomendado NÃO versionar)
+dataset/
+dataset_mola_roi_raw/
+dataset_mola_roi_split/
+archive/
+experiments/
+
+# Secrets / logs
+.streamlit/secrets.toml
+*.log
+

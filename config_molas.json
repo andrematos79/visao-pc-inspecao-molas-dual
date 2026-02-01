@@ -1,0 +1,8 @@
+{
+  "threshold_presente": 0.40,
+  "normalize_lab_equalize": true,
+  "roi": {
+    "ESQ": { "x0": 8, "x1": 35, "y0": 10, "y1": 82 },
+    "DIR": { "x0": 74, "x1": 100, "y0": 17, "y1": 83 }
+  }
+}
