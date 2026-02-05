@@ -1,0 +1,19 @@
+{
+  "UNICORN_WHITE_15W": {
+    "descricao": "SEDA-M",
+    "ativo": true,
+    "model_path": "modelo_molas.keras",
+    "labels_path": "labels.json",
+    "config_path": "config_molas.json"
+  },
+
+  "UNICORN_BLACK_15W": {
+    "descricao": "SEDA-C",
+    "ativo": true,
+    "model_path": "modelo_molas_L2.keras",
+    "labels_path": "labels_L2.json",
+    "config_path": "config_molas_L2.json"
+  }
+}
+
+
