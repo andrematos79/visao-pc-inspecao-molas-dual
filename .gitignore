@@ -24,3 +24,14 @@ experiments/
 .streamlit/secrets.toml
 *.log
 
+# Logs de execução
+logs/
+
+
+# Modelos treinados (Deep Learnig)
+*.keras
+*.h5
+
+# Arquivos temporários / anotações locais
+infer_303_252ncia.txt
+
