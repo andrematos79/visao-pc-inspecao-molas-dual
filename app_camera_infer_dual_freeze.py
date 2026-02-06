@@ -48,6 +48,283 @@ DEFAULT_ROI = {
     "DIR": {"x0": 74, "x1": 100, "y0": 17, "y1": 83},
 }
 
+# ==========================================================
+# DATASET (APRENDIZADO) — CAPTURA E SALVAMENTO
+# ==========================================================
+DATASET_ROOT = BASE_DIR / "dataset_products"
+DATASET_ROOT.mkdir(exist_ok=True)
+
+def safe_slug(s: str) -> str:
+    """Slug simples para nomes de produto/pasta."""
+    keep = []
+    for ch in str(s).strip():
+        if ch.isalnum() or ch in ("_", "-", "."):
+            keep.append(ch)
+        elif ch.isspace():
+            keep.append("_")
+    out = "".join(keep).strip("_")
+    return out if out else "PRODUTO"
+
+def now_stamp() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # ms
+
+def ensure_product_dirs(prod_key: str) -> dict:
+    """Cria estrutura do produto e retorna paths úteis."""
+    prod = safe_slug(prod_key)
+    base = DATASET_ROOT / prod
+    raw_ok = base / "raw" / "ok"
+    raw_ng = base / "raw" / "ng"
+
+    roi_esq_ok = base / "roi" / "ESQ" / "mola_presente"
+    roi_esq_ng = base / "roi" / "ESQ" / "mola_ausente"
+    roi_dir_ok = base / "roi" / "DIR" / "mola_presente"
+    roi_dir_ng = base / "roi" / "DIR" / "mola_ausente"
+
+    for p in [raw_ok, raw_ng, roi_esq_ok, roi_esq_ng, roi_dir_ok, roi_dir_ng]:
+        p.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "base": base,
+        "raw_ok": raw_ok, "raw_ng": raw_ng,
+        "roi_esq_ok": roi_esq_ok, "roi_esq_ng": roi_esq_ng,
+        "roi_dir_ok": roi_dir_ok, "roi_dir_ng": roi_dir_ng,
+    }
+
+def count_jpgs(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return len(list(path.glob("*.jpg")))
+
+def save_jpg(path: Path, img_bgr: np.ndarray, quality: int = 92) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+
+def build_sample_names(prod_key: str, label_simple: str, cam_idx: int) -> tuple[str, str, str]:
+    """
+    Retorna (raw_name, esq_name, dir_name)
+    label_simple: "OK" ou "NG"
+    """
+    ts = now_stamp()
+    prod = safe_slug(prod_key)
+    raw_name = f"{ts}__PROD-{prod}__RAW__{label_simple}__cam{cam_idx}.jpg"
+    esq_name = f"{ts}__PROD-{prod}__ROI-ESQ__{('mola_presente' if label_simple=='OK' else 'mola_ausente')}.jpg"
+    dir_name = f"{ts}__PROD-{prod}__ROI-DIR__{('mola_presente' if label_simple=='OK' else 'mola_ausente')}.jpg"
+    return raw_name, esq_name, dir_name
+
+def capture_source_frame_for_learning() -> np.ndarray | None:
+    """
+    Pega um frame fresco da câmera se estiver ligada.
+    Se não, usa last_frame (se existir).
+    """
+    if st.session_state.get("camera_on") and st.session_state.get("cap") is not None:
+        src = read_fresh_frame(
+            st.session_state.cap,
+            flush_grabs=10,
+            sleep_ms=10,
+            extra_reads=2
+        )
+        if src is not None:
+            st.session_state.last_frame = src.copy()
+        return src
+
+    lf = st.session_state.get("last_frame")
+    return lf.copy() if lf is not None else None
+
+def save_learning_sample(
+    label_simple: str,        # "OK" ou "NG"
+    mode_capture: str,        # "DUAL" | "ESQ" | "DIR"
+    save_raw: bool = True,
+    jpeg_quality: int = 92,
+) -> dict:
+    """
+    Salva amostras do dataset de aprendizado:
+    - RAW opcional (frame inteiro)
+    - ROI ESQ e/ou DIR conforme modo
+    Retorna dict com paths salvos.
+    """
+    prod_key = st.session_state.get("selected_model_key", "MODELO_PADRAO")
+    dirs = ensure_product_dirs(prod_key)
+
+    src = capture_source_frame_for_learning()
+    if src is None:
+        raise RuntimeError("Sem frame para salvar (ligue a câmera ou tenha um last_frame).")
+
+    # recortes (mesma ROI do app)
+    roi_esq = crop_roi_percent(src, st.session_state["esq_x0"], st.session_state["esq_x1"], st.session_state["esq_y0"], st.session_state["esq_y1"])
+    roi_dir = crop_roi_percent(src, st.session_state["dir_x0"], st.session_state["dir_x1"], st.session_state["dir_y0"], st.session_state["dir_y1"])
+
+    # opcional: normalizar como no app (consistência)
+    if bool(st.session_state.get("normalize_roi", DEFAULT_NORMALIZE_LAB)):
+        roi_esq = equalize_lab_bgr(roi_esq)
+        roi_dir = equalize_lab_bgr(roi_dir)
+
+    raw_name, esq_name, dir_name = build_sample_names(prod_key, label_simple, int(st.session_state.get("cam_index_last", 0)))
+
+    saved = {"product": prod_key, "label": label_simple, "mode": mode_capture, "raw": None, "esq": None, "dir": None}
+
+    if save_raw:
+        raw_dir = dirs["raw_ok"] if label_simple == "OK" else dirs["raw_ng"]
+        raw_path = raw_dir / raw_name
+        save_jpg(raw_path, src, quality=jpeg_quality)
+        saved["raw"] = str(raw_path)
+
+    if mode_capture in ("DUAL", "ESQ"):
+        esq_dir = dirs["roi_esq_ok"] if label_simple == "OK" else dirs["roi_esq_ng"]
+        esq_path = esq_dir / esq_name
+        save_jpg(esq_path, roi_esq, quality=jpeg_quality)
+        saved["esq"] = str(esq_path)
+
+    if mode_capture in ("DUAL", "DIR"):
+        dir_dir = dirs["roi_dir_ok"] if label_simple == "OK" else dirs["roi_dir_ng"]
+        dir_path = dir_dir / dir_name
+        save_jpg(dir_path, roi_dir, quality=jpeg_quality)
+        saved["dir"] = str(dir_path)
+
+    # guardar último salvo para preview
+    st.session_state["learning_last_saved"] = saved
+    return saved
+
+def learning_counts(prod_key: str) -> dict:
+    dirs = ensure_product_dirs(prod_key)
+    return {
+        "raw_ok": count_jpgs(Path(dirs["raw_ok"])),
+        "raw_ng": count_jpgs(Path(dirs["raw_ng"])),
+        "esq_ok": count_jpgs(Path(dirs["roi_esq_ok"])),
+        "esq_ng": count_jpgs(Path(dirs["roi_esq_ng"])),
+        "dir_ok": count_jpgs(Path(dirs["roi_dir_ok"])),
+        "dir_ng": count_jpgs(Path(dirs["roi_dir_ng"])),
+        "base": str(dirs["base"]),
+    }
+# ==========================================================
+# DATASET (APRENDIZADO) — SPLIT train/val/test (Fase 2.2)
+# ==========================================================
+import random
+import shutil
+
+def list_jpgs(folder: Path) -> list[Path]:
+    if not folder.exists():
+        return []
+    return sorted(folder.glob("*.jpg"))
+
+def safe_rmtree(path: Path) -> None:
+    """Remove pasta (se existir) com segurança."""
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+
+def ensure_split_dirs(base: Path) -> dict:
+    """
+    Estrutura:
+    base/roi_split/<SIDE>/<SPLIT>/<CLASS>/*.jpg
+    SIDE: ESQ|DIR
+    SPLIT: train|val|test
+    CLASS: mola_presente|mola_ausente
+    """
+    out = {}
+    for side in ["ESQ", "DIR"]:
+        for split in ["train", "val", "test"]:
+            for cls in ["mola_presente", "mola_ausente"]:
+                p = base / "roi_split" / side / split / cls
+                p.mkdir(parents=True, exist_ok=True)
+                out[(side, split, cls)] = p
+    return out
+
+def split_indices(n: int, train_ratio: float, val_ratio: float, test_ratio: float):
+    # normaliza caso o usuário mexa e não feche 1.0
+    s = float(train_ratio) + float(val_ratio) + float(test_ratio)
+    if s <= 0:
+        raise ValueError("Ratios inválidos (soma <= 0).")
+    tr = float(train_ratio) / s
+    vr = float(val_ratio) / s
+    # te fica o resto
+    ti = int(round(n * tr))
+    vi = int(round(n * vr))
+    # garante limites
+    if ti < 0: ti = 0
+    if vi < 0: vi = 0
+    if ti + vi > n:
+        vi = max(0, n - ti)
+    te = n - (ti + vi)
+    return ti, vi, te
+
+def make_split_for_side(
+    product_base: Path,
+    side: str,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.20,
+    test_ratio: float = 0.10,
+    seed: int = 42,
+    overwrite: bool = True,
+) -> dict:
+    """
+    Faz split COPIANDO arquivos .jpg do roi/<SIDE>/<CLASS> para roi_split/<SIDE>/train|val|test/<CLASS>
+    """
+    side = side.upper().strip()
+    if side not in ("ESQ", "DIR"):
+        raise ValueError("side deve ser ESQ ou DIR.")
+
+    src_ok = product_base / "roi" / side / "mola_presente"
+    src_ng = product_base / "roi" / side / "mola_ausente"
+
+    ok_files = list_jpgs(src_ok)
+    ng_files = list_jpgs(src_ng)
+
+    if len(ok_files) == 0 or len(ng_files) == 0:
+        raise RuntimeError(f"Sem imagens suficientes em roi/{side}. OK={len(ok_files)} NG={len(ng_files)}")
+
+    # (re)cria destino
+    split_root = product_base / "roi_split" / side
+    if overwrite:
+        safe_rmtree(split_root)
+
+    split_dirs = ensure_split_dirs(product_base)
+
+    rng = random.Random(int(seed))
+
+    def do_one_class(files: list[Path], cls: str) -> dict:
+        files = files.copy()
+        rng.shuffle(files)
+
+        n = len(files)
+        n_tr, n_va, n_te = split_indices(n, train_ratio, val_ratio, test_ratio)
+
+        tr_files = files[:n_tr]
+        va_files = files[n_tr:n_tr+n_va]
+        te_files = files[n_tr+n_va:]
+
+        # copia
+        for f in tr_files:
+            shutil.copy2(str(f), str(split_dirs[(side, "train", cls)] / f.name))
+        for f in va_files:
+            shutil.copy2(str(f), str(split_dirs[(side, "val", cls)] / f.name))
+        for f in te_files:
+            shutil.copy2(str(f), str(split_dirs[(side, "test", cls)] / f.name))
+
+        return {"total": n, "train": len(tr_files), "val": len(va_files), "test": len(te_files)}
+
+    out_ok = do_one_class(ok_files, "mola_presente")
+    out_ng = do_one_class(ng_files, "mola_ausente")
+
+    return {"side": side, "ok": out_ok, "ng": out_ng, "base": str(product_base)}
+
+def make_split_product(
+    prod_key: str,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.20,
+    test_ratio: float = 0.10,
+    seed: int = 42,
+    overwrite: bool = True,
+) -> dict:
+    """
+    Faz split ESQ e DIR para o produto.
+    """
+    dirs = ensure_product_dirs(prod_key)
+    base = Path(dirs["base"])
+
+    res_esq = make_split_for_side(base, "ESQ", train_ratio, val_ratio, test_ratio, seed, overwrite)
+    res_dir = make_split_for_side(base, "DIR", train_ratio, val_ratio, test_ratio, seed, overwrite)
+
+    return {"product": prod_key, "ESQ": res_esq, "DIR": res_dir, "split_root": str(base / "roi_split")}
+
 
 # ==========================================================
 # REGISTRY (CADASTRO DE MODELOS)
@@ -547,6 +824,41 @@ if "cfg_molas" not in st.session_state:
 
 
 # ==========================================================
+# SIDEBAR — LOGO + SOBRE
+# ==========================================================
+from datetime import datetime
+import platform
+
+ASSETS_DIR = BASE_DIR / "assets"
+LOGO_PATH = ASSETS_DIR / "logo_empresa.jpg"
+
+with st.sidebar:
+    # Logo da empresa
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), use_container_width=True)
+    else:
+        st.caption("⚠️ Logo não encontrado em assets/logo_empresa.jpg")
+
+    # Espaço visual
+    st.markdown("---")
+
+    # Info / Sobre (padrão industrial)
+    with st.expander("ℹ️ Sobre o Sistema", expanded=False):
+        st.markdown("### Inspeção de Molas — DUAL")
+        st.markdown(f"- **Versão:** {APP_VERSION}")
+        st.markdown(f"- **Status:** {APP_STAGE}")
+        st.markdown(f"- **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        st.markdown("- **Empresa:** Salcomp")
+        st.markdown("- **Engenheiro Responsável:** André Gama de Matos")
+        
+        st.markdown("---")
+        st.markdown("**Ambiente de Execução**")
+        st.markdown(f"- **Sistema Operacional:** {platform.system()} {platform.release()}")
+        st.markdown(f"- **Python:** {platform.python_version()}")
+        st.markdown(f"- **OpenCV:** {cv2.__version__}")
+        st.markdown(f"- **TensorFlow:** {tf.__version__}")
+
+# ==========================================================
 # SIDEBAR — MODO + PIN
 # ==========================================================
 st.sidebar.header("Modo")
@@ -695,17 +1007,147 @@ with col_cam_btns[1]:
 
 btn_capture = st.sidebar.button("📸 Capturar + Inferir (DUAL)", type="primary", use_container_width=True)
 btn_live = st.sidebar.button("▶️ LIVE", use_container_width=True)
+# ==========================================================
+# SIDEBAR — APRENDIZADO (ENG)
+# ==========================================================
+# guardar camera index usado (para nomear arquivos)
+st.session_state["cam_index_last"] = int(cam_index)
 
-btn_reset = st.sidebar.button("🔁 Reset contadores", use_container_width=True)
-if btn_reset:
-    st.session_state.cnt_total = 0
-    st.session_state.cnt_ok = 0
-    st.session_state.cnt_ng = 0
-    st.session_state.cnt_ng_esq = 0
-    st.session_state.cnt_ng_dir = 0
-    st.session_state.history = []
-    st.sidebar.success("Contadores resetados ✅")
-    st.rerun()
+if "learning_last_saved" not in st.session_state:
+    st.session_state["learning_last_saved"] = None
+
+if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
+    st.sidebar.divider()
+    st.sidebar.header("📚 Aprendizado (Eng.)")
+
+    prod_key = st.session_state.get("selected_model_key", "MODELO_PADRAO")
+    st.sidebar.caption(f"Produto atual: **{prod_key}**")
+
+    mode_capture = st.sidebar.radio(
+        "Modo de captura",
+        options=["DUAL", "ESQ", "DIR"],
+        index=0,
+        horizontal=True,
+        help="DUAL salva ESQ+DIR. ESQ salva apenas ESQ. DIR salva apenas DIR."
+    )
+
+    save_raw = st.sidebar.checkbox("Salvar também RAW (frame inteiro)", value=True)
+    jpeg_q = st.sidebar.slider("Qualidade JPG", 70, 98, 92, 1)
+
+    c_ok, c_ng = st.sidebar.columns(2)
+    with c_ok:
+        btn_save_ok = st.sidebar.button("✅ Salvar OK", use_container_width=True)
+    with c_ng:
+        btn_save_ng = st.sidebar.button("❌ Salvar NG", use_container_width=True)
+
+    # contadores
+    try:
+        cnt = learning_counts(prod_key)
+        st.sidebar.markdown("**Contagem (produto atual):**")
+        st.sidebar.write(f"RAW OK: {cnt['raw_ok']} | RAW NG: {cnt['raw_ng']}")
+        st.sidebar.write(f"ESQ OK: {cnt['esq_ok']} | ESQ NG: {cnt['esq_ng']}")
+        st.sidebar.write(f"DIR OK: {cnt['dir_ok']} | DIR NG: {cnt['dir_ng']}")
+        st.sidebar.caption(f"Base: `{cnt['base']}`")
+    except Exception:
+        st.sidebar.warning("Dataset ainda vazio ou não inicializado.")
+        cnt = None
+
+    # ações salvar (sempre dentro do ENG)
+    if btn_save_ok or btn_save_ng:
+        try:
+            label_simple = "OK" if btn_save_ok else "NG"
+            saved = save_learning_sample(
+                label_simple=label_simple,
+                mode_capture=mode_capture,
+                save_raw=save_raw,
+                jpeg_quality=int(jpeg_q),
+            )
+            st.sidebar.success(f"Amostra salva ({label_simple}) ✅")
+        except Exception as e:
+            st.sidebar.error(f"Falha ao salvar amostra: {e}")
+
+    # ==========================================================
+    # SPLIT train/val/test (Fase 2.2)
+    # ==========================================================
+    with st.sidebar.expander("📦 Preparar dataset (Split train/val/test)", expanded=False):
+        st.caption("Gera cópia das imagens em roi_split/ESQ e roi_split/DIR (train/val/test).")
+
+        c_r1, c_r2, c_r3 = st.columns(3)
+        with c_r1:
+            train_ratio = st.number_input("Train", min_value=0.10, max_value=0.95, value=0.70, step=0.05)
+        with c_r2:
+            val_ratio = st.number_input("Val", min_value=0.05, max_value=0.50, value=0.20, step=0.05)
+        with c_r3:
+            test_ratio = st.number_input("Test", min_value=0.05, max_value=0.50, value=0.10, step=0.05)
+
+        seed = st.number_input("Seed (reprodutível)", min_value=0, max_value=999999, value=42, step=1)
+        overwrite = st.checkbox("Sobrescrever split existente", value=True)
+
+        btn_make_split = st.button("🚀 Gerar Split agora", use_container_width=True)
+
+        if btn_make_split:
+            try:
+                cnt_local = learning_counts(prod_key)
+                min_ok = min(cnt_local["esq_ok"], cnt_local["dir_ok"])
+                min_ng = min(cnt_local["esq_ng"], cnt_local["dir_ng"])
+
+                if min_ok < 10 or min_ng < 10:
+                    st.warning(f"Poucas imagens para split. Sugestão: >=10 por classe/lado. "
+                               f"Min OK={min_ok}, Min NG={min_ng}")
+
+                result = make_split_product(
+                    prod_key=prod_key,
+                    train_ratio=float(train_ratio),
+                    val_ratio=float(val_ratio),
+                    test_ratio=float(test_ratio),
+                    seed=int(seed),
+                    overwrite=bool(overwrite),
+                )
+
+                st.success("Split gerado com sucesso ✅")
+                st.write(f"Destino: `{result['split_root']}`")
+
+                st.markdown("**Resumo ESQ**")
+                st.write("OK:", result["ESQ"]["ok"])
+                st.write("NG:", result["ESQ"]["ng"])
+
+                st.markdown("**Resumo DIR**")
+                st.write("OK:", result["DIR"]["ok"])
+                st.write("NG:", result["DIR"]["ng"])
+
+            except Exception as e:
+                st.error(f"Falha ao gerar split: {e}")
+
+    # preview rápido da última amostra salva (sidebar)
+    last = st.session_state.get("learning_last_saved")
+    if last:
+        st.sidebar.markdown("**Última amostra salva:**")
+        if last.get("raw"):
+            st.sidebar.caption("RAW")
+            try:
+                img = cv2.imread(last["raw"])
+                if img is not None:
+                    st.sidebar.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
+            except Exception:
+                pass
+
+        if last.get("esq"):
+            st.sidebar.caption("ROI ESQ")
+            try:
+                img = cv2.imread(last["esq"])
+                if img is not None:
+                    st.sidebar.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
+            except Exception:
+                pass
+
+        if last.get("dir"):
+            st.sidebar.caption("ROI DIR")
+            try:
+                img = cv2.imread(last["dir"])
+                if img is not None:
+                    st.sidebar.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
+            except Exception:
+                pass
 
 
 # ==========================================================
