@@ -35,3 +35,6 @@ logs/
 # Arquivos temporários / anotações locais
 infer_303_252ncia.txt
 
+# logs locais
+logs/
+*.log
