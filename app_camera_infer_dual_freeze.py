@@ -758,14 +758,18 @@ section[data-testid="stSidebar"] h3 {
 # ==========================================================
 # SESSION STATE
 # ==========================================================
+
+if "display_frame" not in st.session_state:
+    st.session_state.display_frame = None
+
+if "last_frame" not in st.session_state:
+    st.session_state.last_frame = None
+
 if "model" not in st.session_state:
     st.session_state.model = None
 
 if "camera_on" not in st.session_state:
     st.session_state.camera_on = False
-
-if "last_frame" not in st.session_state:
-    st.session_state.last_frame = None
 
 if "selected_model_key" not in st.session_state:
     st.session_state.selected_model_key = "MODELO_PADRAO"
@@ -1215,6 +1219,7 @@ else:
 # ==========================================================
 if btn_cam_on:
     safe_release_cap()
+    st.session_state.display_frame = None
 
     backend = cv2.CAP_DSHOW if use_dshow else cv2.CAP_ANY
     cap = cv2.VideoCapture(int(cam_index), backend)
@@ -1238,27 +1243,18 @@ if btn_cam_on:
 
 if btn_cam_off:
     safe_release_cap()
+    st.session_state.display_frame = None
     st.session_state.frozen = False
     st.session_state.frozen_frame = None
-
+    
 if btn_live:
+    st.session_state.display_frame = None   # ✅ volta ao live real
     st.session_state.frozen = False
     st.session_state.frozen_frame = None
 
 
-# ==========================================================
-# Frame live / frozen
-# ==========================================================
-frame = None
-if st.session_state.frozen and st.session_state.frozen_frame is not None:
-    frame = st.session_state.frozen_frame.copy()
-else:
-    if st.session_state.camera_on and st.session_state.cap is not None:
-        frame = read_one_frame(st.session_state.cap)
-        if frame is not None:
-            st.session_state.last_frame = frame.copy()
-    else:
-        frame = st.session_state.last_frame.copy() if st.session_state.last_frame is not None else None
+
+
 
 
 # ==========================================================
@@ -1356,9 +1352,12 @@ if btn_capture:
             st.session_state.last_error = "Sem imagem para inferir (ligue a câmera e capture)."
             st.session_state.last_result = None
         else:
-            # NÃO congelar preview
-            st.session_state.frozen_frame = src.copy()
-            st.session_state.frozen = False
+        # ✅ Visualização deve mostrar exatamente o frame usado na inferência
+            st.session_state.display_frame = src.copy()
+            st.session_state.last_frame = src.copy()
+
+
+
 
             start_dt = datetime.now()
             try:
@@ -1401,6 +1400,20 @@ if btn_capture:
             except Exception as e:
                 st.session_state.last_error = f"Erro na inferência: {e}"
                 st.session_state.last_result = None
+# ==========================================================
+# Frame live / frozen
+# ==========================================================
+frame = None
+
+if st.session_state.get("display_frame") is not None:
+    frame = st.session_state.display_frame.copy()
+elif st.session_state.camera_on and st.session_state.cap is not None:
+    frame = read_one_frame(st.session_state.cap)
+    if frame is not None:
+        st.session_state.last_frame = frame.copy()
+else:
+    lf = st.session_state.get("last_frame")
+    frame = lf.copy() if lf is not None else None
 
 
 # ==========================================================
