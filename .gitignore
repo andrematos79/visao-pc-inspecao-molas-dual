@@ -1,10 +1,16 @@
 # Ambiente virtual
-venv/
 .venv/
+venv/
+env/
 
 # Cache Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
 
 # Streamlit
 .streamlit/
@@ -38,3 +44,12 @@ infer_303_252ncia.txt
 # logs locais
 logs/
 *.log
+# Datasets e outputs
+dataset_products/
+dataset_*/
+logs/
+# SO / IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

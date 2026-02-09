@@ -1,17 +1,21 @@
 from pathlib import Path
 import json
+import re
+import os
+import csv
+import io
+import time
+import random
+import shutil
+import platform
+import subprocess
+from datetime import datetime
+
 import numpy as np
 import cv2
 import streamlit as st
 import tensorflow as tf
 import textwrap
-from datetime import datetime
-import os
-import csv
-import io
-import platform
-import subprocess
-import time
 
 # Donut (matplotlib) — com fallback se não existir
 try:
@@ -28,13 +32,13 @@ APP_STAGE = "Stable"
 # CONFIG / PATHS
 # ==========================================================
 BASE_DIR = Path(__file__).resolve().parent
+
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 MODEL_PATH = BASE_DIR / "modelo_molas.keras"
 LABELS_PATH = BASE_DIR / "labels.json"
 CONFIG_PATH = BASE_DIR / "config_molas.json"
-
 REGISTRY_PATH = BASE_DIR / "models_registry.json"
 
 IMG_SIZE = (224, 224)
@@ -49,13 +53,148 @@ DEFAULT_ROI = {
 }
 
 # ==========================================================
+# SESSION STATE — INIT (blindado)
+# ==========================================================
+def init_session():
+    # contadores produção
+    st.session_state.setdefault("cnt_total", 0)
+    st.session_state.setdefault("cnt_ok", 0)
+    st.session_state.setdefault("cnt_ng", 0)
+    st.session_state.setdefault("cnt_ng_esq", 0)
+    st.session_state.setdefault("cnt_ng_dir", 0)
+
+    # histórico p/ charts
+    st.session_state.setdefault("history", [])
+
+    # resultados/erros
+    st.session_state.setdefault("last_error", None)
+    st.session_state.setdefault("last_result", None)
+
+    # frames
+    st.session_state.setdefault("display_frame", None)
+    st.session_state.setdefault("last_frame", None)
+    st.session_state.setdefault("frozen", False)
+    st.session_state.setdefault("frozen_frame", None)
+
+    # câmera
+    st.session_state.setdefault("cap", None)
+    st.session_state.setdefault("camera_on", False)
+    st.session_state.setdefault("cam_index_last", 0)
+
+    # modelo/labels
+    st.session_state.setdefault("model", None)
+    st.session_state.setdefault("labels", None)
+
+    # modo + PIN
+    st.session_state.setdefault("user_mode", "OPERADOR")
+    st.session_state.setdefault("eng_unlocked", False)
+
+    # modelo selecionado
+    st.session_state.setdefault("selected_model_key", "MODELO_PADRAO")
+    st.session_state.setdefault("product_model", st.session_state.get("selected_model_key", "MODELO_PADRAO"))
+
+    # turnos
+    st.session_state.setdefault("shift", 1)
+
+    # aprendizado
+    st.session_state.setdefault("learning_last_saved", None)
+
+init_session()
+
+# ==========================================================
+# CONFIG POR MODELO (setup de linha) — ROI/Threshold por produto
+# ==========================================================
+CONFIG_DEFAULT_PATH = (BASE_DIR / "config_molas.json")
+CONFIGS_DIR = (BASE_DIR / "configs")
+CONFIGS_DIR.mkdir(exist_ok=True)
+
+def _safe_model_key(model_key: str) -> str:
+    s = str(model_key).strip()
+    s = re.sub(r"[^A-Za-z0-9_\-\.]+", "_", s)
+    return s or "MODEL_DEFAULT"
+
+def model_config_path(model_key: str) -> Path:
+    return CONFIGS_DIR / f"{_safe_model_key(model_key)}.json"
+
+def load_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def save_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def get_effective_config(model_key: str) -> dict:
+    """
+    Carrega config específica do MODELO, se existir.
+    Caso contrário, usa o config_molas.json (default/global).
+    """
+    p = model_config_path(model_key)
+    cfg = load_json(p)
+    if cfg:
+        return cfg
+    return load_json(CONFIG_DEFAULT_PATH)
+
+def apply_config_to_session(cfg: dict) -> None:
+    """
+    Aplica config nas chaves padrão do session_state.
+    Essas chaves serão usadas pelos sliders (única fonte).
+    """
+    if not cfg:
+        return
+
+    st.session_state["threshold_presente"] = float(cfg.get("threshold_presente", 0.40))
+    st.session_state["normalize_lab_equalize"] = bool(cfg.get("normalize_lab_equalize", True))
+
+    roi = cfg.get("roi", {}) or {}
+    esq = roi.get("ESQ", {}) or {}
+    dirr = roi.get("DIR", {}) or {}
+
+    st.session_state["roi_esq_x0"] = int(esq.get("x0", 8))
+    st.session_state["roi_esq_x1"] = int(esq.get("x1", 35))
+    st.session_state["roi_esq_y0"] = int(esq.get("y0", 10))
+    st.session_state["roi_esq_y1"] = int(esq.get("y1", 82))
+
+    st.session_state["roi_dir_x0"] = int(dirr.get("x0", 74))
+    st.session_state["roi_dir_x1"] = int(dirr.get("x1", 100))
+    st.session_state["roi_dir_y0"] = int(dirr.get("y0", 17))
+    st.session_state["roi_dir_y1"] = int(dirr.get("y1", 83))
+
+def collect_config_from_session() -> dict:
+    """
+    Gera payload para salvar no JSON do modelo atual.
+    """
+    return {
+        "threshold_presente": float(st.session_state.get("threshold_presente", 0.40)),
+        "normalize_lab_equalize": bool(st.session_state.get("normalize_lab_equalize", True)),
+        "roi": {
+            "ESQ": {
+                "x0": int(st.session_state.get("roi_esq_x0", 8)),
+                "x1": int(st.session_state.get("roi_esq_x1", 35)),
+                "y0": int(st.session_state.get("roi_esq_y0", 10)),
+                "y1": int(st.session_state.get("roi_esq_y1", 82)),
+            },
+            "DIR": {
+                "x0": int(st.session_state.get("roi_dir_x0", 74)),
+                "x1": int(st.session_state.get("roi_dir_x1", 100)),
+                "y0": int(st.session_state.get("roi_dir_y0", 17)),
+                "y1": int(st.session_state.get("roi_dir_y1", 83)),
+            },
+        },
+    }
+
+# garantir defaults coerentes (1ª execução)
+if "threshold_presente" not in st.session_state:
+    apply_config_to_session(get_effective_config(st.session_state.get("selected_model_key", "MODELO_PADRAO")))
+
+# ==========================================================
 # DATASET (APRENDIZADO) — CAPTURA E SALVAMENTO
 # ==========================================================
 DATASET_ROOT = BASE_DIR / "dataset_products"
 DATASET_ROOT.mkdir(exist_ok=True)
 
 def safe_slug(s: str) -> str:
-    """Slug simples para nomes de produto/pasta."""
     keep = []
     for ch in str(s).strip():
         if ch.isalnum() or ch in ("_", "-", "."):
@@ -66,10 +205,9 @@ def safe_slug(s: str) -> str:
     return out if out else "PRODUTO"
 
 def now_stamp() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # ms
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
 def ensure_product_dirs(prod_key: str) -> dict:
-    """Cria estrutura do produto e retorna paths úteis."""
     prod = safe_slug(prod_key)
     base = DATASET_ROOT / prod
     raw_ok = base / "raw" / "ok"
@@ -100,10 +238,6 @@ def save_jpg(path: Path, img_bgr: np.ndarray, quality: int = 92) -> None:
     cv2.imwrite(str(path), img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
 
 def build_sample_names(prod_key: str, label_simple: str, cam_idx: int) -> tuple[str, str, str]:
-    """
-    Retorna (raw_name, esq_name, dir_name)
-    label_simple: "OK" ou "NG"
-    """
     ts = now_stamp()
     prod = safe_slug(prod_key)
     raw_name = f"{ts}__PROD-{prod}__RAW__{label_simple}__cam{cam_idx}.jpg"
@@ -111,37 +245,85 @@ def build_sample_names(prod_key: str, label_simple: str, cam_idx: int) -> tuple[
     dir_name = f"{ts}__PROD-{prod}__ROI-DIR__{('mola_presente' if label_simple=='OK' else 'mola_ausente')}.jpg"
     return raw_name, esq_name, dir_name
 
+def read_one_frame(cap: cv2.VideoCapture):
+    if cap is None or not cap.isOpened():
+        return None
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        return None
+    return frame
+
+def read_fresh_frame(
+    cap: cv2.VideoCapture,
+    flush_grabs: int = 6,
+    sleep_ms: int = 15,
+    extra_reads: int = 0,
+):
+    if cap is None or not cap.isOpened():
+        return None
+
+    for _ in range(int(flush_grabs)):
+        cap.grab()
+        if sleep_ms > 0:
+            time.sleep(float(sleep_ms) / 1000.0)
+
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        return None
+
+    for _ in range(int(extra_reads)):
+        ok2, frame2 = cap.read()
+        if ok2 and frame2 is not None:
+            frame = frame2
+
+    return frame
+
 def capture_source_frame_for_learning() -> np.ndarray | None:
-    """
-    Pega um frame fresco da câmera se estiver ligada.
-    Se não, usa last_frame (se existir).
-    """
     if st.session_state.get("camera_on") and st.session_state.get("cap") is not None:
         src = read_fresh_frame(
-            st.session_state.cap,
+            st.session_state["cap"],
             flush_grabs=10,
             sleep_ms=10,
             extra_reads=2
         )
         if src is not None:
-            st.session_state.last_frame = src.copy()
+            st.session_state["last_frame"] = src.copy()
         return src
 
     lf = st.session_state.get("last_frame")
     return lf.copy() if lf is not None else None
 
+def clamp01(v: float) -> float:
+    return max(0.0, min(1.0, v))
+
+def crop_roi_percent(frame_bgr: np.ndarray, x0p, x1p, y0p, y1p) -> np.ndarray:
+    h, w = frame_bgr.shape[:2]
+    x0 = int(clamp01(x0p / 100.0) * w)
+    x1 = int(clamp01(x1p / 100.0) * w)
+    y0 = int(clamp01(y0p / 100.0) * h)
+    y1 = int(clamp01(y1p / 100.0) * h)
+
+    x0, x1 = sorted([x0, x1])
+    y0, y1 = sorted([y0, y1])
+
+    if x1 - x0 < 10 or y1 - y0 < 10:
+        return frame_bgr.copy()
+
+    return frame_bgr[y0:y1, x0:x1].copy()
+
+def equalize_lab_bgr(img_bgr: np.ndarray) -> np.ndarray:
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l2 = cv2.equalizeHist(l)
+    lab2 = cv2.merge([l2, a, b])
+    return cv2.cvtColor(lab2, cv2.COLOR_LAB2BGR)
+
 def save_learning_sample(
-    label_simple: str,        # "OK" ou "NG"
-    mode_capture: str,        # "DUAL" | "ESQ" | "DIR"
+    label_simple: str,
+    mode_capture: str,
     save_raw: bool = True,
     jpeg_quality: int = 92,
 ) -> dict:
-    """
-    Salva amostras do dataset de aprendizado:
-    - RAW opcional (frame inteiro)
-    - ROI ESQ e/ou DIR conforme modo
-    Retorna dict com paths salvos.
-    """
     prod_key = st.session_state.get("selected_model_key", "MODELO_PADRAO")
     dirs = ensure_product_dirs(prod_key)
 
@@ -149,16 +331,31 @@ def save_learning_sample(
     if src is None:
         raise RuntimeError("Sem frame para salvar (ligue a câmera ou tenha um last_frame).")
 
-    # recortes (mesma ROI do app)
-    roi_esq = crop_roi_percent(src, st.session_state["esq_x0"], st.session_state["esq_x1"], st.session_state["esq_y0"], st.session_state["esq_y1"])
-    roi_dir = crop_roi_percent(src, st.session_state["dir_x0"], st.session_state["dir_x1"], st.session_state["dir_y0"], st.session_state["dir_y1"])
+    roi_esq = crop_roi_percent(
+        src,
+        int(st.session_state.get("roi_esq_x0", DEFAULT_ROI["ESQ"]["x0"])),
+        int(st.session_state.get("roi_esq_x1", DEFAULT_ROI["ESQ"]["x1"])),
+        int(st.session_state.get("roi_esq_y0", DEFAULT_ROI["ESQ"]["y0"])),
+        int(st.session_state.get("roi_esq_y1", DEFAULT_ROI["ESQ"]["y1"])),
+    )
 
-    # opcional: normalizar como no app (consistência)
-    if bool(st.session_state.get("normalize_roi", DEFAULT_NORMALIZE_LAB)):
+    roi_dir = crop_roi_percent(
+        src,
+        int(st.session_state.get("roi_dir_x0", DEFAULT_ROI["DIR"]["x0"])),
+        int(st.session_state.get("roi_dir_x1", DEFAULT_ROI["DIR"]["x1"])),
+        int(st.session_state.get("roi_dir_y0", DEFAULT_ROI["DIR"]["y0"])),
+        int(st.session_state.get("roi_dir_y1", DEFAULT_ROI["DIR"]["y1"])),
+    )
+
+    if bool(st.session_state.get("normalize_lab_equalize", DEFAULT_NORMALIZE_LAB)):
         roi_esq = equalize_lab_bgr(roi_esq)
         roi_dir = equalize_lab_bgr(roi_dir)
 
-    raw_name, esq_name, dir_name = build_sample_names(prod_key, label_simple, int(st.session_state.get("cam_index_last", 0)))
+    raw_name, esq_name, dir_name = build_sample_names(
+        prod_key,
+        label_simple,
+        int(st.session_state.get("cam_index_last", 0)),
+    )
 
     saved = {"product": prod_key, "label": label_simple, "mode": mode_capture, "raw": None, "esq": None, "dir": None}
 
@@ -180,7 +377,6 @@ def save_learning_sample(
         save_jpg(dir_path, roi_dir, quality=jpeg_quality)
         saved["dir"] = str(dir_path)
 
-    # guardar último salvo para preview
     st.session_state["learning_last_saved"] = saved
     return saved
 
@@ -195,30 +391,20 @@ def learning_counts(prod_key: str) -> dict:
         "dir_ng": count_jpgs(Path(dirs["roi_dir_ng"])),
         "base": str(dirs["base"]),
     }
-# ==========================================================
-# DATASET (APRENDIZADO) — SPLIT train/val/test (Fase 2.2)
-# ==========================================================
-import random
-import shutil
 
+# ==========================================================
+# DATASET (APRENDIZADO) — SPLIT train/val/test
+# ==========================================================
 def list_jpgs(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     return sorted(folder.glob("*.jpg"))
 
 def safe_rmtree(path: Path) -> None:
-    """Remove pasta (se existir) com segurança."""
     if path.exists() and path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
 
 def ensure_split_dirs(base: Path) -> dict:
-    """
-    Estrutura:
-    base/roi_split/<SIDE>/<SPLIT>/<CLASS>/*.jpg
-    SIDE: ESQ|DIR
-    SPLIT: train|val|test
-    CLASS: mola_presente|mola_ausente
-    """
     out = {}
     for side in ["ESQ", "DIR"]:
         for split in ["train", "val", "test"]:
@@ -229,16 +415,13 @@ def ensure_split_dirs(base: Path) -> dict:
     return out
 
 def split_indices(n: int, train_ratio: float, val_ratio: float, test_ratio: float):
-    # normaliza caso o usuário mexa e não feche 1.0
     s = float(train_ratio) + float(val_ratio) + float(test_ratio)
     if s <= 0:
         raise ValueError("Ratios inválidos (soma <= 0).")
     tr = float(train_ratio) / s
     vr = float(val_ratio) / s
-    # te fica o resto
     ti = int(round(n * tr))
     vi = int(round(n * vr))
-    # garante limites
     if ti < 0: ti = 0
     if vi < 0: vi = 0
     if ti + vi > n:
@@ -255,9 +438,6 @@ def make_split_for_side(
     seed: int = 42,
     overwrite: bool = True,
 ) -> dict:
-    """
-    Faz split COPIANDO arquivos .jpg do roi/<SIDE>/<CLASS> para roi_split/<SIDE>/train|val|test/<CLASS>
-    """
     side = side.upper().strip()
     if side not in ("ESQ", "DIR"):
         raise ValueError("side deve ser ESQ ou DIR.")
@@ -271,13 +451,11 @@ def make_split_for_side(
     if len(ok_files) == 0 or len(ng_files) == 0:
         raise RuntimeError(f"Sem imagens suficientes em roi/{side}. OK={len(ok_files)} NG={len(ng_files)}")
 
-    # (re)cria destino
     split_root = product_base / "roi_split" / side
     if overwrite:
         safe_rmtree(split_root)
 
     split_dirs = ensure_split_dirs(product_base)
-
     rng = random.Random(int(seed))
 
     def do_one_class(files: list[Path], cls: str) -> dict:
@@ -291,7 +469,6 @@ def make_split_for_side(
         va_files = files[n_tr:n_tr+n_va]
         te_files = files[n_tr+n_va:]
 
-        # copia
         for f in tr_files:
             shutil.copy2(str(f), str(split_dirs[(side, "train", cls)] / f.name))
         for f in va_files:
@@ -314,9 +491,6 @@ def make_split_product(
     seed: int = 42,
     overwrite: bool = True,
 ) -> dict:
-    """
-    Faz split ESQ e DIR para o produto.
-    """
     dirs = ensure_product_dirs(prod_key)
     base = Path(dirs["base"])
 
@@ -324,7 +498,6 @@ def make_split_product(
     res_dir = make_split_for_side(base, "DIR", train_ratio, val_ratio, test_ratio, seed, overwrite)
 
     return {"product": prod_key, "ESQ": res_esq, "DIR": res_dir, "split_root": str(base / "roi_split")}
-
 
 # ==========================================================
 # REGISTRY (CADASTRO DE MODELOS)
@@ -366,9 +539,8 @@ def resolve_model_paths(entry: dict) -> tuple[Path, Path, Path]:
     cp = BASE_DIR / str(entry.get("config_path", CONFIG_PATH.name))
     return mp, lp, cp
 
-
 # ==========================================================
-# HELPERS
+# MODEL HELPERS
 # ==========================================================
 def load_labels(path: Path) -> list[str]:
     if not path.exists():
@@ -385,36 +557,7 @@ def load_model_cached(path_str: str) -> tf.keras.Model:
         raise FileNotFoundError(f"modelo não encontrado: {path}")
     return tf.keras.models.load_model(path, compile=False)
 
-def clamp01(v: float) -> float:
-    return max(0.0, min(1.0, v))
-
-def crop_roi_percent(frame_bgr: np.ndarray, x0p, x1p, y0p, y1p) -> np.ndarray:
-    h, w = frame_bgr.shape[:2]
-    x0 = int(clamp01(x0p / 100.0) * w)
-    x1 = int(clamp01(x1p / 100.0) * w)
-    y0 = int(clamp01(y0p / 100.0) * h)
-    y1 = int(clamp01(y1p / 100.0) * h)
-
-    x0, x1 = sorted([x0, x1])
-    y0, y1 = sorted([y0, y1])
-
-    if x1 - x0 < 10 or y1 - y0 < 10:
-        return frame_bgr.copy()
-
-    return frame_bgr[y0:y1, x0:x1].copy()
-
-def equalize_lab_bgr(img_bgr: np.ndarray) -> np.ndarray:
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    l2 = cv2.equalizeHist(l)
-    lab2 = cv2.merge([l2, a, b])
-    return cv2.cvtColor(lab2, cv2.COLOR_LAB2BGR)
-
 def preprocess_bgr_for_model(frame_bgr: np.ndarray) -> np.ndarray:
-    """
-    Modelo tem preprocess_input dentro do grafo.
-    Entregar RGB float32 0..255 (SEM /255).
-    """
     img = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, IMG_SIZE, interpolation=cv2.INTER_AREA)
     img = img.astype(np.float32)
@@ -433,119 +576,18 @@ def prob_of_class(labels: list[str], probs: np.ndarray, class_name: str) -> floa
         return 0.0
     return float(probs[labels.index(class_name)])
 
-def read_one_frame(cap: cv2.VideoCapture):
-    if cap is None or not cap.isOpened():
-        return None
-    ok, frame = cap.read()
-    if not ok or frame is None:
-        return None
-    return frame
-
-def read_fresh_frame(
-    cap: cv2.VideoCapture,
-    flush_grabs: int = 6,
-    sleep_ms: int = 15,
-    extra_reads: int = 0,
-):
-    if cap is None or not cap.isOpened():
-        return None
-
-    for _ in range(int(flush_grabs)):
-        cap.grab()
-        if sleep_ms > 0:
-            time.sleep(float(sleep_ms) / 1000.0)
-
-    ok, frame = cap.read()
-    if not ok or frame is None:
-        return None
-
-    for _ in range(int(extra_reads)):
-        ok2, frame2 = cap.read()
-        if ok2 and frame2 is not None:
-            frame = frame2
-
-    return frame
-
 def safe_release_cap():
-    if st.session_state.get("cap") is not None:
+    cap = st.session_state.get("cap")
+    if cap is not None:
         try:
-            st.session_state.cap.release()
+            cap.release()
         except Exception:
             pass
-    st.session_state.cap = None
-    st.session_state.camera_on = False
-
-
-def load_config_molas(path: Path) -> dict:
-    cfg_default = {
-        "threshold_presente": DEFAULT_THRESH_PRESENTE,
-        "normalize_lab_equalize": DEFAULT_NORMALIZE_LAB,
-        "roi": DEFAULT_ROI,
-    }
-
-    if not path.exists():
-        return cfg_default
-
-    try:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return cfg_default
-
-    out = dict(cfg_default)
-
-    if isinstance(cfg, dict):
-        if "threshold_presente" in cfg:
-            try:
-                out["threshold_presente"] = float(cfg["threshold_presente"])
-            except Exception:
-                pass
-
-        if "normalize_lab_equalize" in cfg:
-            try:
-                out["normalize_lab_equalize"] = bool(cfg["normalize_lab_equalize"])
-            except Exception:
-                pass
-
-        if "roi" in cfg and isinstance(cfg["roi"], dict):
-            roi = dict(cfg_default["roi"])
-            for side in ["ESQ", "DIR"]:
-                if side in cfg["roi"] and isinstance(cfg["roi"][side], dict):
-                    roi_side = dict(roi.get(side, {}))
-                    for k in ["x0", "x1", "y0", "y1"]:
-                        if k in cfg["roi"][side]:
-                            try:
-                                roi_side[k] = int(cfg["roi"][side][k])
-                            except Exception:
-                                pass
-                    roi[side] = roi_side
-            out["roi"] = roi
-
-    out["threshold_presente"] = max(0.10, min(0.99, float(out["threshold_presente"])))
-    return out
-
-def apply_config_to_session(cfg: dict) -> None:
-    st.session_state["th_presente"] = float(cfg.get("threshold_presente", DEFAULT_THRESH_PRESENTE))
-    st.session_state["normalize_roi"] = bool(cfg.get("normalize_lab_equalize", DEFAULT_NORMALIZE_LAB))
-
-    roi = cfg.get("roi", DEFAULT_ROI)
-
-    st.session_state["esq_x0"] = int(roi["ESQ"]["x0"])
-    st.session_state["esq_x1"] = int(roi["ESQ"]["x1"])
-    st.session_state["esq_y0"] = int(roi["ESQ"]["y0"])
-    st.session_state["esq_y1"] = int(roi["ESQ"]["y1"])
-
-    st.session_state["dir_x0"] = int(roi["DIR"]["x0"])
-    st.session_state["dir_x1"] = int(roi["DIR"]["x1"])
-    st.session_state["dir_y0"] = int(roi["DIR"]["y0"])
-    st.session_state["dir_y1"] = int(roi["DIR"]["y1"])
-
+    st.session_state["cap"] = None
+    st.session_state["camera_on"] = False
 
 def ensure_model_loaded_or_raise():
-    """
-    Carrega modelo/labels SOMENTE quando necessário (ex: capturar/inferir).
-    Isso evita “tela branca” na troca de modelo durante rerun.
-    """
-    if st.session_state.model is not None and st.session_state.labels is not None:
+    if st.session_state.get("model") is not None and st.session_state.get("labels") is not None:
         return
 
     paths = st.session_state.get("selected_model_paths")
@@ -556,38 +598,25 @@ def ensure_model_loaded_or_raise():
         model_p = MODEL_PATH
         labels_p = LABELS_PATH
 
-    st.session_state.labels = load_labels(labels_p)
-    st.session_state.model = load_model_cached(str(model_p))
+    st.session_state["labels"] = load_labels(labels_p)
+    st.session_state["model"] = load_model_cached(str(model_p))
 
-
+# ==========================================================
+# LOG CSV
+# ==========================================================
 def append_log_csv(row: dict):
     today = datetime.now().strftime("%Y-%m-%d")
     log_path = LOG_DIR / f"inspecao_molas_{today}.csv"
 
     fieldnames = [
-        "timestamp",
-        "modelo",
-        "turno",
-        "resultado_final",
-        "cs_code",
-        "cs_detail",
-        "p_esq",
-        "p_dir",
-        "th_presente",
-        "camera_index",
-        "directshow",
-        "source",
-        "total",
-        "ok",
-        "ng",
-        "yield_pct",
-        "test_time_sec",
-        "start_time",
-        "end_time",
+        "timestamp", "modelo", "turno", "resultado_final",
+        "cs_code", "cs_detail", "p_esq", "p_dir", "th_presente",
+        "camera_index", "directshow", "source",
+        "total", "ok", "ng", "yield_pct",
+        "test_time_sec", "start_time", "end_time",
     ]
 
     file_exists = log_path.exists()
-
     with open(log_path, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
         if not file_exists:
@@ -606,7 +635,6 @@ def get_cs_code(res: dict, th: float) -> tuple[str, str]:
         return "NG_DIR", f"p_dir<{th:.2f}"
     return "NG_AMBAS", f"p_esq<{th:.2f} | p_dir<{th:.2f}"
 
-
 # ==========================================================
 # STREAMLIT APP
 # ==========================================================
@@ -616,237 +644,64 @@ st.title("Inspeção de Molas — DUAL (modo estável) ✅")
 # ==========================================================
 # CSS
 # ==========================================================
-st.markdown("""
-<style>
+st.markdown("""<style>
 .app-footer {
-    position: fixed;
-    bottom: 6px;
-    right: 12px;
-    font-size: 11px;
-    color: #9ca3af;
-    opacity: 0.85;
-    z-index: 9999;
-    pointer-events: none;
+    position: fixed; bottom: 6px; right: 12px;
+    font-size: 11px; color: #9ca3af; opacity: 0.85;
+    z-index: 9999; pointer-events: none;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
-
-.roi-box {
-    background-color: #f4f6f8;
-    border: 1px solid #d0d4d9;
-    border-radius: 8px;
-    padding: 12px;
-    margin-bottom: 10px;
-}
+.roi-box { background-color: #f4f6f8; border: 1px solid #d0d4d9; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .roi-title { font-weight: 600; font-size: 16px; margin-bottom: 4px; }
 .roi-caption { font-size: 12px; color: #6b7280; margin-bottom: 10px; }
-
 .roi-frame { border-radius: 6px; padding: 6px; }
 .roi-ok { border: 2px solid #22c55e; }
 .roi-ng { border: 2px solid #dc2626; }
-
 .roi-bar {
-    height: 44px;
-    border-radius: 6px;
-    margin: 8px 0 12px 0;
-    border: 1px solid #d0d4d9;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 35px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    color: #ffffff;
-    text-transform: uppercase;
-    line-height: 1;
+    height: 44px; border-radius: 6px; margin: 8px 0 12px 0;
+    border: 1px solid #d0d4d9; display: flex; align-items: center; justify-content: center;
+    font-size: 35px; font-weight: 700; letter-spacing: 1px; color: #ffffff;
+    text-transform: uppercase; line-height: 1;
 }
 .roi-bar-ok { background: #22c55e; }
 .roi-bar-ng { background: #ef4444; }
-
-.result-box {
-    border-radius: 10px;
-    padding: 16px;
-    margin-top: 10px;
-    margin-bottom: 14px;
-    text-align: center;
-}
+.result-box { border-radius: 10px; padding: 16px; margin-top: 10px; margin-bottom: 14px; text-align: center; }
 .result-ok { background-color: #dcfce7; border: 2px solid #22c55e; color: #166534; }
 .result-ng { background-color: #fee2e2; border: 2px solid #dc2626; color: #7f1d1d; }
 .result-text { font-size: 42px; font-weight: 800; letter-spacing: 1px; }
 .result-details { font-size: 14px; margin-top: 8px; }
-
-.kpi-grid{
-    display:grid;
-    grid-template-columns:repeat(3, minmax(120px, 1fr));
-    gap:8px;
-    margin-top: 0px;
-    padding-top: 0px;
-    padding-bottom: 6px;
-    max-width: 580px;
-    width: 100%;
-}
-.kpi-card{
-    background:#fff;
-    border:1px solid #e5e7eb;
-    border-radius:8px;
-    padding:6px 8px;
-    min-height:52px;
-}
+.kpi-grid{ display:grid; grid-template-columns:repeat(3, minmax(120px, 1fr)); gap:8px; max-width: 580px; width: 100%; }
+.kpi-card{ background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:6px 8px; min-height:52px; }
 .kpi-label { font-size:12px; color:#6b7280; margin-bottom:0px; line-height: 1.05; }
 .kpi-value { font-size:22px; font-weight:800; color:#111827; margin:2px 0 0 0; line-height:1.0; }
-.kpi-wide{
-    grid-column:1/-1;
-    display:flex;
-    justify-content:space-between;
-    align-items:baseline;
-    min-height:44px;
-    padding:8px 12px;
-    margin-bottom: 2px;
-}
+.kpi-wide{ grid-column:1/-1; display:flex; justify-content:space-between; align-items:baseline; min-height:44px; padding:8px 12px; margin-bottom: 2px; }
 .kpi-value-yield { font-size:22px; font-weight:900; line-height: 1.0; }
-
-.compact-divider{
-    height: 10px;
-    background-color: #eef2f6;
-    border: 1px solid #d0d4d9;
-    border-radius: 999px;
-    margin: 8px 0 10px 0;
-    width: 100%;
-    box-sizing: border-box;
-}
-
-.resumo-card{
-    background:#ffffff;
-    border:1px solid #d0d4d9;
-    border-radius:10px;
-    padding:10px 10px 8px 10px;
-    margin-top:0px;
-}
+.compact-divider{ height: 10px; background-color: #eef2f6; border: 1px solid #d0d4d9; border-radius: 999px; margin: 8px 0 10px 0; width: 100%; box-sizing: border-box; }
+.resumo-card{ background:#ffffff; border:1px solid #d0d4d9; border-radius:10px; padding:10px 10px 8px 10px; margin-top:0px; }
 .resumo-title{ font-weight:700; font-size:20px; margin:0 0 6px 0; }
-
-.pie-wrap{
-    margin-top:-60px;
-    display:flex;
-    justify-content:center;
-    align-items:flex-start;
-}
-
+.pie-wrap{ margin-top:-60px; display:flex; justify-content:center; align-items:flex-start; }
 section[data-testid="stSidebar"] { padding-top: 6px; padding-bottom: 6px; }
 section[data-testid="stSidebar"] label { margin-bottom: 1px !important; font-size: 11px; }
-section[data-testid="stSidebar"] input,
-section[data-testid="stSidebar"] select {
-    min-height: 32px !important;
-    padding-top: 4px !important;
-    padding-bottom: 4px !important;
-    font-size: 14px;
-}
-section[data-testid="stSidebar"] button {
-    min-height: 32px !important;
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
-    font-size: 12px;
-}
+section[data-testid="stSidebar"] input, section[data-testid="stSidebar"] select { min-height: 32px !important; padding-top: 4px !important; padding-bottom: 4px !important; font-size: 14px; }
+section[data-testid="stSidebar"] button { min-height: 32px !important; padding-top: 2px !important; padding-bottom: 2px !important; font-size: 12px; }
 section[data-testid="stSidebar"] hr { margin-top: 6px; margin-bottom: 6px; }
-section[data-testid="stSidebar"] h2, 
-section[data-testid="stSidebar"] h3 {
-    margin: 6px 0 4px 0 !important;
-    font-size: 16px !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# ==========================================================
-# SESSION STATE
-# ==========================================================
-
-if "display_frame" not in st.session_state:
-    st.session_state.display_frame = None
-
-if "last_frame" not in st.session_state:
-    st.session_state.last_frame = None
-
-if "model" not in st.session_state:
-    st.session_state.model = None
-
-if "camera_on" not in st.session_state:
-    st.session_state.camera_on = False
-
-if "selected_model_key" not in st.session_state:
-    st.session_state.selected_model_key = "MODELO_PADRAO"
-
-if "selected_model_paths" not in st.session_state:
-    st.session_state.selected_model_paths = None
-
-if "selected_model_desc" not in st.session_state:
-    st.session_state.selected_model_desc = ""
-
-if "shift" not in st.session_state:
-    st.session_state.shift = 1
-
-if "labels" not in st.session_state:
-    st.session_state.labels = None
-
-if "frozen" not in st.session_state:
-    st.session_state.frozen = False
-
-if "frozen_frame" not in st.session_state:
-    st.session_state.frozen_frame = None
-
-if "cap" not in st.session_state:
-    st.session_state.cap = None
-
-if "last_result" not in st.session_state:
-    st.session_state.last_result = None
-
-if "last_error" not in st.session_state:
-    st.session_state.last_error = None
-
-# Contadores / Histórico
-if "cnt_total" not in st.session_state:
-    st.session_state.cnt_total = 0
-if "cnt_ok" not in st.session_state:
-    st.session_state.cnt_ok = 0
-if "cnt_ng" not in st.session_state:
-    st.session_state.cnt_ng = 0
-if "cnt_ng_esq" not in st.session_state:
-    st.session_state.cnt_ng_esq = 0
-if "cnt_ng_dir" not in st.session_state:
-    st.session_state.cnt_ng_dir = 0
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-# Modo + PIN
-if "user_mode" not in st.session_state:
-    st.session_state.user_mode = "OPERADOR"
-if "eng_unlocked" not in st.session_state:
-    st.session_state.eng_unlocked = False
-
-# Config em session
-if "cfg_molas" not in st.session_state:
-    st.session_state.cfg_molas = load_config_molas(CONFIG_PATH)
-    apply_config_to_session(st.session_state.cfg_molas)
-
+section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 { margin: 6px 0 4px 0 !important; font-size: 16px !important; }
+</style>""", unsafe_allow_html=True)
 
 # ==========================================================
 # SIDEBAR — LOGO + SOBRE
 # ==========================================================
-from datetime import datetime
-import platform
-
 ASSETS_DIR = BASE_DIR / "assets"
 LOGO_PATH = ASSETS_DIR / "logo_empresa.jpg"
 
 with st.sidebar:
-    # Logo da empresa
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), use_container_width=True)
     else:
         st.caption("⚠️ Logo não encontrado em assets/logo_empresa.jpg")
 
-    # Espaço visual
     st.markdown("---")
 
-    # Info / Sobre (padrão industrial)
     with st.expander("ℹ️ Sobre o Sistema", expanded=False):
         st.markdown("### Inspeção de Molas — DUAL")
         st.markdown(f"- **Versão:** {APP_VERSION}")
@@ -854,7 +709,6 @@ with st.sidebar:
         st.markdown(f"- **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         st.markdown("- **Empresa:** Salcomp")
         st.markdown("- **Engenheiro Responsável:** André Gama de Matos")
-        
         st.markdown("---")
         st.markdown("**Ambiente de Execução**")
         st.markdown(f"- **Sistema Operacional:** {platform.system()} {platform.release()}")
@@ -870,32 +724,31 @@ c1, c2 = st.sidebar.columns(2)
 
 with c1:
     if st.sidebar.button("👷 Operador", use_container_width=True):
-        st.session_state.user_mode = "OPERADOR"
-        st.session_state.eng_unlocked = False
+        st.session_state["user_mode"] = "OPERADOR"
+        st.session_state["eng_unlocked"] = False
         st.rerun()
 
 with c2:
     if st.sidebar.button("🛠 Eng.", use_container_width=True):
-        st.session_state.user_mode = "ENG"
+        st.session_state["user_mode"] = "ENG"
         st.rerun()
 
-st.sidebar.caption(f"Modo atual: **{st.session_state.user_mode}**")
+st.sidebar.caption(f"Modo atual: **{st.session_state.get('user_mode','OPERADOR')}**")
 
-if st.session_state.user_mode == "ENG" and not st.session_state.eng_unlocked:
+if st.session_state.get("user_mode") == "ENG" and not st.session_state.get("eng_unlocked", False):
     st.sidebar.warning("Digite o PIN para acessar o modo Eng.")
     pin = st.sidebar.text_input("PIN", type="password")
     if pin == ENG_PIN:
-        st.session_state.eng_unlocked = True
+        st.session_state["eng_unlocked"] = True
         st.sidebar.success("Liberado ✅")
         st.rerun()
     elif pin != "":
         st.sidebar.error("PIN incorreto ❌")
 
-st.sidebar.divider()
-
+is_eng = (st.session_state.get("user_mode") == "ENG" and st.session_state.get("eng_unlocked", False))
 
 # ==========================================================
-# SIDEBAR — PRODUÇÃO (MODELO/LINHA travado)
+# SIDEBAR — PRODUÇÃO (MODELO/LINHA)
 # ==========================================================
 ensure_registry_file()
 registry = load_registry(REGISTRY_PATH)
@@ -903,7 +756,7 @@ ativos = get_active_models(registry)
 
 st.sidebar.subheader("Produção")
 
-if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
+if is_eng:
     options_models = list(registry.keys()) if registry else ["MODELO_PADRAO"]
     caption_models = "Modelo (linha) — Engenharia"
 else:
@@ -914,9 +767,7 @@ def fmt_model(k: str) -> str:
     d = registry.get(k, {})
     desc = d.get("descricao", "")
     tag = "" if d.get("ativo", False) else " [INATIVO]"
-    if desc:
-        return f"{k} — {desc}{tag}"
-    return f"{k}{tag}"
+    return f"{k} — {desc}{tag}" if desc else f"{k}{tag}"
 
 current_key = st.session_state.get("selected_model_key", "MODELO_PADRAO")
 if current_key not in options_models:
@@ -938,31 +789,32 @@ if selected_key != st.session_state.get("selected_model_key"):
     st.session_state["selected_model_desc"] = str(entry.get("descricao", ""))
     st.session_state["selected_model_paths"] = (str(mp), str(lp), str(cp))
 
-    # invalida modelo/labels (vai carregar só quando clicar para inferir)
-    st.session_state.model = None
-    st.session_state.labels = None
+    st.session_state["model"] = None
+    st.session_state["labels"] = None
 
-    # recarrega config do modelo selecionado
-    st.session_state.cfg_molas = load_config_molas(cp)
-    apply_config_to_session(st.session_state.cfg_molas)
+    # recarrega config do modelo selecionado (por arquivo do modelo)
+    try:
+        cfg_model = load_json(Path(cp))
+        if not cfg_model:
+            cfg_model = get_effective_config(selected_key)
+    except Exception:
+        cfg_model = get_effective_config(selected_key)
+
+    apply_config_to_session(cfg_model)
 
     # limpa estados visuais
-    st.session_state.frozen = False
-    st.session_state.frozen_frame = None
-    st.session_state.last_frame = None
-    st.session_state.last_result = None
-    st.session_state.last_error = None
+    st.session_state["frozen"] = False
+    st.session_state["frozen_frame"] = None
+    st.session_state["last_frame"] = None
+    st.session_state["last_result"] = None
+    st.session_state["last_error"] = None
 
-    # reset seguro da câmera ao trocar modelo (evita OpenCV travar)
     safe_release_cap()
-
     st.sidebar.info("🔄 Modelo trocado. Ligue a câmera novamente e faça a próxima inspeção.")
     st.rerun()
 
-# mantém o nome usado no log
-st.session_state.product_model = st.session_state.selected_model_key
+st.session_state["product_model"] = st.session_state.get("selected_model_key", "MODELO_PADRAO")
 
-# Turno sempre visível
 st.sidebar.selectbox(
     "Turno",
     options=[1, 2, 3],
@@ -971,30 +823,42 @@ st.sidebar.selectbox(
     key="shift"
 )
 
-# TIME
 now_str = datetime.now().strftime("%d/%m/%y %H:%M:%S")
-st.sidebar.markdown(
-    """
-    <style>
-    .time-label { font-size: 12px; color: #6b7280; margin-bottom: 2px; }
-    .time-box {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 8px 10px;
-        color: #374151;
-        font-size: 13px;
-        font-weight: 600;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.sidebar.markdown("""
+<style>
+.time-label { font-size: 12px; color: #6b7280; margin-bottom: 2px; }
+.time-box {
+    background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;
+    padding: 8px 10px; color: #374151; font-size: 13px; font-weight: 600;
+}
+</style>
+""", unsafe_allow_html=True)
 st.sidebar.markdown('<div class="time-label">Time</div>', unsafe_allow_html=True)
 st.sidebar.markdown(f'<div class="time-box">{now_str}</div>', unsafe_allow_html=True)
 
 st.sidebar.divider()
 
+# ==========================================================
+# BOTÕES CONFIG DO MODELO — SOMENTE ENG LIBERADO
+# ==========================================================
+if is_eng:
+    st.sidebar.subheader("Config do Modelo (Eng.)")
+
+    if st.sidebar.button("💾 Salvar config deste modelo"):
+        mk = st.session_state.get("selected_model_key", "MODELO_PADRAO")
+        p = model_config_path(mk)
+        payload = collect_config_from_session()
+        save_json(p, payload)
+        st.sidebar.success(f"Salvo: {p.name}")
+
+    if st.sidebar.button("↩️ Recarregar config deste modelo"):
+        mk = st.session_state.get("selected_model_key", "MODELO_PADRAO")
+        cfg = get_effective_config(mk)
+        apply_config_to_session(cfg)
+        st.sidebar.info("Config recarregada do arquivo.")
+        st.rerun()
+
+st.sidebar.divider()
 
 # ==========================================================
 # SIDEBAR — CÂMERA
@@ -1011,16 +875,13 @@ with col_cam_btns[1]:
 
 btn_capture = st.sidebar.button("📸 Capturar + Inferir (DUAL)", type="primary", use_container_width=True)
 btn_live = st.sidebar.button("▶️ LIVE", use_container_width=True)
+
+st.session_state["cam_index_last"] = int(cam_index)
+
 # ==========================================================
 # SIDEBAR — APRENDIZADO (ENG)
 # ==========================================================
-# guardar camera index usado (para nomear arquivos)
-st.session_state["cam_index_last"] = int(cam_index)
-
-if "learning_last_saved" not in st.session_state:
-    st.session_state["learning_last_saved"] = None
-
-if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
+if is_eng:
     st.sidebar.divider()
     st.sidebar.header("📚 Aprendizado (Eng.)")
 
@@ -1044,7 +905,6 @@ if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
     with c_ng:
         btn_save_ng = st.sidebar.button("❌ Salvar NG", use_container_width=True)
 
-    # contadores
     try:
         cnt = learning_counts(prod_key)
         st.sidebar.markdown("**Contagem (produto atual):**")
@@ -1056,11 +916,10 @@ if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
         st.sidebar.warning("Dataset ainda vazio ou não inicializado.")
         cnt = None
 
-    # ações salvar (sempre dentro do ENG)
     if btn_save_ok or btn_save_ng:
         try:
             label_simple = "OK" if btn_save_ok else "NG"
-            saved = save_learning_sample(
+            save_learning_sample(
                 label_simple=label_simple,
                 mode_capture=mode_capture,
                 save_raw=save_raw,
@@ -1070,9 +929,6 @@ if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
         except Exception as e:
             st.sidebar.error(f"Falha ao salvar amostra: {e}")
 
-    # ==========================================================
-    # SPLIT train/val/test (Fase 2.2)
-    # ==========================================================
     with st.sidebar.expander("📦 Preparar dataset (Split train/val/test)", expanded=False):
         st.caption("Gera cópia das imagens em roi_split/ESQ e roi_split/DIR (train/val/test).")
 
@@ -1122,104 +978,33 @@ if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
             except Exception as e:
                 st.error(f"Falha ao gerar split: {e}")
 
-    # preview rápido da última amostra salva (sidebar)
-    last = st.session_state.get("learning_last_saved")
-    if last:
-        st.sidebar.markdown("**Última amostra salva:**")
-        if last.get("raw"):
-            st.sidebar.caption("RAW")
-            try:
-                img = cv2.imread(last["raw"])
-                if img is not None:
-                    st.sidebar.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
-            except Exception:
-                pass
-
-        if last.get("esq"):
-            st.sidebar.caption("ROI ESQ")
-            try:
-                img = cv2.imread(last["esq"])
-                if img is not None:
-                    st.sidebar.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
-            except Exception:
-                pass
-
-        if last.get("dir"):
-            st.sidebar.caption("ROI DIR")
-            try:
-                img = cv2.imread(last["dir"])
-                if img is not None:
-                    st.sidebar.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
-            except Exception:
-                pass
-
-
 # ==========================================================
 # SIDEBAR — CONFIG (apenas ENG liberado)
 # ==========================================================
 show_debug = False
-
-if st.session_state.user_mode == "ENG" and st.session_state.eng_unlocked:
+if is_eng:
     st.sidebar.divider()
     st.sidebar.header("Config (Eng.)")
 
-    cfg_paths = st.session_state.get("selected_model_paths")
-    cfg_file = Path(cfg_paths[2]) if cfg_paths and len(cfg_paths) == 3 else CONFIG_PATH
+    st.slider("Threshold mínimo p/ MOLA PRESENTE", 0.0, 1.0,
+              value=float(st.session_state.get("threshold_presente", 0.40)),
+              step=0.01, key="threshold_presente")
 
-    st.sidebar.write(f"`{cfg_file.name}` existe? {'✅' if cfg_file.exists() else '❌'}")
-    if st.sidebar.button("🔄 Recarregar config do modelo", use_container_width=True):
-        st.session_state.cfg_molas = load_config_molas(cfg_file)
-        apply_config_to_session(st.session_state.cfg_molas)
-        st.rerun()
-
-    th_presente = st.sidebar.slider(
-        "Threshold mínimo p/ MOLA PRESENTE",
-        0.10, 0.99,
-        float(st.session_state.get("th_presente", DEFAULT_THRESH_PRESENTE)),
-        0.01,
-        key="th_presente"
-    )
-
-    normalize_roi = st.sidebar.checkbox(
-        "Normalizar ROI (LAB equalize)",
-        value=bool(st.session_state.get("normalize_roi", DEFAULT_NORMALIZE_LAB)),
-        key="normalize_roi"
-    )
+    st.checkbox("Normalizar ROI (LAB equalize)",
+                value=bool(st.session_state.get("normalize_lab_equalize", True)),
+                key="normalize_lab_equalize")
 
     st.sidebar.subheader("ROI (%)")
-    esq_x0 = st.sidebar.slider("ESQ x0 (%)", 0, 100, int(st.session_state.get("esq_x0", DEFAULT_ROI["ESQ"]["x0"])), 1, key="esq_x0")
-    esq_x1 = st.sidebar.slider("ESQ x1 (%)", 0, 100, int(st.session_state.get("esq_x1", DEFAULT_ROI["ESQ"]["x1"])), 1, key="esq_x1")
-    esq_y0 = st.sidebar.slider("ESQ y0 (%)", 0, 100, int(st.session_state.get("esq_y0", DEFAULT_ROI["ESQ"]["y0"])), 1, key="esq_y0")
-    esq_y1 = st.sidebar.slider("ESQ y1 (%)", 0, 100, int(st.session_state.get("esq_y1", DEFAULT_ROI["ESQ"]["y1"])), 1, key="esq_y1")
-
-    dir_x0 = st.sidebar.slider("DIR x0 (%)", 0, 100, int(st.session_state.get("dir_x0", DEFAULT_ROI["DIR"]["x0"])), 1, key="dir_x0")
-    dir_x1 = st.sidebar.slider("DIR x1 (%)", 0, 100, int(st.session_state.get("dir_x1", DEFAULT_ROI["DIR"]["x1"])), 1, key="dir_x1")
-    dir_y0 = st.sidebar.slider("DIR y0 (%)", 0, 100, int(st.session_state.get("dir_y0", DEFAULT_ROI["DIR"]["y0"])), 1, key="dir_y0")
-    dir_y1 = st.sidebar.slider("DIR y1 (%)", 0, 100, int(st.session_state.get("dir_y1", DEFAULT_ROI["DIR"]["y1"])), 1, key="dir_y1")
+    # (se quiser sliders de ROI aqui, você pode adicionar depois)
 
     show_debug = st.sidebar.checkbox("Mostrar debug", value=False)
-
-else:
-    th_presente = float(st.session_state.get("th_presente", DEFAULT_THRESH_PRESENTE))
-    normalize_roi = bool(st.session_state.get("normalize_roi", DEFAULT_NORMALIZE_LAB))
-
-    esq_x0 = int(st.session_state.get("esq_x0", DEFAULT_ROI["ESQ"]["x0"]))
-    esq_x1 = int(st.session_state.get("esq_x1", DEFAULT_ROI["ESQ"]["x1"]))
-    esq_y0 = int(st.session_state.get("esq_y0", DEFAULT_ROI["ESQ"]["y0"]))
-    esq_y1 = int(st.session_state.get("esq_y1", DEFAULT_ROI["ESQ"]["y1"]))
-
-    dir_x0 = int(st.session_state.get("dir_x0", DEFAULT_ROI["DIR"]["x0"]))
-    dir_x1 = int(st.session_state.get("dir_x1", DEFAULT_ROI["DIR"]["x1"]))
-    dir_y0 = int(st.session_state.get("dir_y0", DEFAULT_ROI["DIR"]["y0"]))
-    dir_y1 = int(st.session_state.get("dir_y1", DEFAULT_ROI["DIR"]["y1"]))
-
 
 # ==========================================================
 # Camera ON/OFF
 # ==========================================================
 if btn_cam_on:
     safe_release_cap()
-    st.session_state.display_frame = None
+    st.session_state["display_frame"] = None
 
     backend = cv2.CAP_DSHOW if use_dshow else cv2.CAP_ANY
     cap = cv2.VideoCapture(int(cam_index), backend)
@@ -1231,38 +1016,46 @@ if btn_cam_on:
         pass
 
     if not cap.isOpened():
-        st.session_state.camera_on = False
-        st.session_state.last_error = "Não consegui abrir a câmera. Tente outro índice."
-        st.session_state.cap = None
+        st.session_state["camera_on"] = False
+        st.session_state["last_error"] = "Não consegui abrir a câmera. Tente outro índice."
+        st.session_state["cap"] = None
     else:
-        st.session_state.cap = cap
-        st.session_state.camera_on = True
-        st.session_state.last_error = None
-        st.session_state.frozen = False
-        st.session_state.frozen_frame = None
+        st.session_state["cap"] = cap
+        st.session_state["camera_on"] = True
+        st.session_state["last_error"] = None
+        st.session_state["frozen"] = False
+        st.session_state["frozen_frame"] = None
 
 if btn_cam_off:
     safe_release_cap()
-    st.session_state.display_frame = None
-    st.session_state.frozen = False
-    st.session_state.frozen_frame = None
-    
+    st.session_state["display_frame"] = None
+    st.session_state["frozen"] = False
+    st.session_state["frozen_frame"] = None
+
 if btn_live:
-    st.session_state.display_frame = None   # ✅ volta ao live real
-    st.session_state.frozen = False
-    st.session_state.frozen_frame = None
-
-
-
-
-
+    st.session_state["display_frame"] = None
+    st.session_state["frozen"] = False
+    st.session_state["frozen_frame"] = None
 
 # ==========================================================
 # Infer DUAL
 # ==========================================================
 def infer_dual_on_frame(frame_bgr: np.ndarray):
-    if st.session_state.model is None or st.session_state.labels is None:
+    if st.session_state.get("model") is None or st.session_state.get("labels") is None:
         raise RuntimeError("Modelo não carregado.")
+
+    esq_x0 = int(st.session_state.get("roi_esq_x0", DEFAULT_ROI["ESQ"]["x0"]))
+    esq_x1 = int(st.session_state.get("roi_esq_x1", DEFAULT_ROI["ESQ"]["x1"]))
+    esq_y0 = int(st.session_state.get("roi_esq_y0", DEFAULT_ROI["ESQ"]["y0"]))
+    esq_y1 = int(st.session_state.get("roi_esq_y1", DEFAULT_ROI["ESQ"]["y1"]))
+
+    dir_x0 = int(st.session_state.get("roi_dir_x0", DEFAULT_ROI["DIR"]["x0"]))
+    dir_x1 = int(st.session_state.get("roi_dir_x1", DEFAULT_ROI["DIR"]["x1"]))
+    dir_y0 = int(st.session_state.get("roi_dir_y0", DEFAULT_ROI["DIR"]["y0"]))
+    dir_y1 = int(st.session_state.get("roi_dir_y1", DEFAULT_ROI["DIR"]["y1"]))
+
+    th_presente = float(st.session_state.get("threshold_presente", DEFAULT_THRESH_PRESENTE))
+    normalize_roi = bool(st.session_state.get("normalize_lab_equalize", DEFAULT_NORMALIZE_LAB))
 
     roi_esq = crop_roi_percent(frame_bgr, esq_x0, esq_x1, esq_y0, esq_y1)
     roi_dir = crop_roi_percent(frame_bgr, dir_x0, dir_x1, dir_y0, dir_y1)
@@ -1271,15 +1064,14 @@ def infer_dual_on_frame(frame_bgr: np.ndarray):
         roi_esq = equalize_lab_bgr(roi_esq)
         roi_dir = equalize_lab_bgr(roi_dir)
 
-    cls_esq, conf_esq, probs_esq = predict_one(st.session_state.model, st.session_state.labels, roi_esq)
-    cls_dir, conf_dir, probs_dir = predict_one(st.session_state.model, st.session_state.labels, roi_dir)
+    cls_esq, conf_esq, probs_esq = predict_one(st.session_state["model"], st.session_state["labels"], roi_esq)
+    cls_dir, conf_dir, probs_dir = predict_one(st.session_state["model"], st.session_state["labels"], roi_dir)
 
-    p_pres_esq = prob_of_class(st.session_state.labels, probs_esq, "mola_presente")
-    p_pres_dir = prob_of_class(st.session_state.labels, probs_dir, "mola_presente")
+    p_pres_esq = prob_of_class(st.session_state["labels"], probs_esq, "mola_presente")
+    p_pres_dir = prob_of_class(st.session_state["labels"], probs_dir, "mola_presente")
 
-    ok_esq = (p_pres_esq >= float(th_presente))
-    ok_dir = (p_pres_dir >= float(th_presente))
-
+    ok_esq = (p_pres_esq >= th_presente)
+    ok_dir = (p_pres_dir >= th_presente)
     aprovado = ok_esq and ok_dir
 
     return {
@@ -1297,67 +1089,60 @@ def infer_dual_on_frame(frame_bgr: np.ndarray):
     }
 
 def update_metrics_and_history(res: dict):
-    st.session_state.cnt_total += 1
+    st.session_state["cnt_total"] += 1
 
-    if res["aprovado"]:
-        st.session_state.cnt_ok += 1
+    if res.get("aprovado", False):
+        st.session_state["cnt_ok"] += 1
     else:
-        st.session_state.cnt_ng += 1
-        if not res["ok_esq"]:
-            st.session_state.cnt_ng_esq += 1
-        if not res["ok_dir"]:
-            st.session_state.cnt_ng_dir += 1
+        st.session_state["cnt_ng"] += 1
+        if not res.get("ok_esq", True):
+            st.session_state["cnt_ng_esq"] += 1
+        if not res.get("ok_dir", True):
+            st.session_state["cnt_ng_dir"] += 1
 
-    st.session_state.history.append({
-        "n": int(st.session_state.cnt_total),
-        "aprovado": int(res["aprovado"]),
-        "ok_esq": int(res["ok_esq"]),
-        "ok_dir": int(res["ok_dir"]),
-        "p_esq": float(res["p_pres_esq"]),
-        "p_dir": float(res["p_pres_dir"]),
-        "ng_esq": int(not res["ok_esq"]),
-        "ng_dir": int(not res["ok_dir"]),
+    st.session_state["history"].append({
+        "n": int(st.session_state.get("cnt_total", 0)),
+        "aprovado": int(bool(res.get("aprovado", False))),
+        "ok_esq": int(bool(res.get("ok_esq", False))),
+        "ok_dir": int(bool(res.get("ok_dir", False))),
+        "p_esq": float(res.get("p_pres_esq", 0.0)),
+        "p_dir": float(res.get("p_pres_dir", 0.0)),
+        "ng_esq": int(not bool(res.get("ok_esq", True))),
+        "ng_dir": int(not bool(res.get("ok_dir", True))),
     })
-
 
 # ==========================================================
 # ACTIONS — Capturar + Inferir
 # ==========================================================
 if btn_capture:
-    st.session_state.last_error = None
+    st.session_state["last_error"] = None
 
-    # carrega modelo/labels SOMENTE aqui (evita tela branca na troca de modelo)
     try:
         ensure_model_loaded_or_raise()
     except Exception as e:
-        # ✅ NÃO usar st.stop() — isso pode causar “tela branca” por interromper o layout
-        st.session_state.last_error = f"Falha ao carregar modelo atual: {e}"
-        st.session_state.last_result = None
+        st.session_state["last_error"] = f"Falha ao carregar modelo atual: {e}"
+        st.session_state["last_result"] = None
     else:
         src = None
-        if st.session_state.camera_on and st.session_state.cap is not None:
+        if st.session_state.get("camera_on") and st.session_state.get("cap") is not None:
             src = read_fresh_frame(
-                st.session_state.cap,
+                st.session_state["cap"],
                 flush_grabs=12,
                 sleep_ms=10,
                 extra_reads=2
             )
             if src is not None:
-                st.session_state.last_frame = src.copy()
+                st.session_state["last_frame"] = src.copy()
         else:
-            if st.session_state.last_frame is not None:
-                src = st.session_state.last_frame.copy()
+            lf = st.session_state.get("last_frame")
+            src = lf.copy() if lf is not None else None
 
         if src is None:
-            st.session_state.last_error = "Sem imagem para inferir (ligue a câmera e capture)."
-            st.session_state.last_result = None
+            st.session_state["last_error"] = "Sem imagem para inferir (ligue a câmera e capture)."
+            st.session_state["last_result"] = None
         else:
-        # ✅ Visualização deve mostrar exatamente o frame usado na inferência
-            st.session_state.display_frame = src.copy()
-            st.session_state.last_frame = src.copy()
-
-
-
+            st.session_state["display_frame"] = src.copy()
+            st.session_state["last_frame"] = src.copy()
 
             start_dt = datetime.now()
             try:
@@ -1365,12 +1150,17 @@ if btn_capture:
                 end_dt = datetime.now()
                 test_time_sec = (end_dt - start_dt).total_seconds()
 
-                st.session_state.last_result = res
+                st.session_state["last_result"] = res
                 update_metrics_and_history(res)
 
                 timestamp = end_dt.strftime("%Y-%m-%d %H:%M:%S")
-                th_local = float(st.session_state.get("th_presente", DEFAULT_THRESH_PRESENTE))
+                th_local = float(st.session_state.get("threshold_presente", DEFAULT_THRESH_PRESENTE))
                 cs_code, cs_detail = get_cs_code(res, th_local)
+
+                total = int(st.session_state.get("cnt_total", 0))
+                ok = int(st.session_state.get("cnt_ok", 0))
+                ng = int(st.session_state.get("cnt_ng", 0))
+                yield_pct = round((ok / total * 100.0), 2) if total > 0 else 0.0
 
                 row = {
                     "timestamp": timestamp,
@@ -1385,11 +1175,10 @@ if btn_capture:
                     "camera_index": int(cam_index),
                     "directshow": bool(use_dshow),
                     "source": "camera",
-                    "total": int(st.session_state.cnt_total),
-                    "ok": int(st.session_state.cnt_ok),
-                    "ng": int(st.session_state.cnt_ng),
-                    "yield_pct": round((st.session_state.cnt_ok / st.session_state.cnt_total * 100.0), 2)
-                                if st.session_state.cnt_total > 0 else 0.0,
+                    "total": total,
+                    "ok": ok,
+                    "ng": ng,
+                    "yield_pct": yield_pct,
                     "test_time_sec": f"{test_time_sec:.3f}",
                     "start_time": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     "end_time": end_dt.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1398,36 +1187,35 @@ if btn_capture:
                 append_log_csv(row)
 
             except Exception as e:
-                st.session_state.last_error = f"Erro na inferência: {e}"
-                st.session_state.last_result = None
+                st.session_state["last_error"] = f"Erro na inferência: {e}"
+                st.session_state["last_result"] = None
+
 # ==========================================================
-# Frame live / frozen
+# Frame live / display_frame
 # ==========================================================
 frame = None
-
 if st.session_state.get("display_frame") is not None:
-    frame = st.session_state.display_frame.copy()
-elif st.session_state.camera_on and st.session_state.cap is not None:
-    frame = read_one_frame(st.session_state.cap)
+    frame = st.session_state["display_frame"].copy()
+elif st.session_state.get("camera_on") and st.session_state.get("cap") is not None:
+    frame = read_one_frame(st.session_state["cap"])
     if frame is not None:
-        st.session_state.last_frame = frame.copy()
+        st.session_state["last_frame"] = frame.copy()
 else:
     lf = st.session_state.get("last_frame")
     frame = lf.copy() if lf is not None else None
 
-
 # ==========================================================
-# MAIN — mensagens de erro (evita “tela branca”)
+# MAIN — mensagens de erro
 # ==========================================================
-if st.session_state.last_error:
-    st.error(st.session_state.last_error)
+if st.session_state.get("last_error"):
+    st.error(st.session_state["last_error"])
 
 # ==========================================================
 # ✅ RESUMO (PRODUÇÃO)
 # ==========================================================
-total = int(st.session_state.cnt_total)
-ok = int(st.session_state.cnt_ok)
-ng = int(st.session_state.cnt_ng)
+total = int(st.session_state.get("cnt_total", 0))
+ok = int(st.session_state.get("cnt_ok", 0))
+ng = int(st.session_state.get("cnt_ng", 0))
 yield_pct = (ok / total * 100.0) if total > 0 else 0.0
 
 kpi_html = textwrap.dedent(f"""
@@ -1436,17 +1224,14 @@ kpi_html = textwrap.dedent(f"""
     <div class="kpi-label">Total</div>
     <div class="kpi-value">{total}</div>
   </div>
-
   <div class="kpi-card">
     <div class="kpi-label">OK</div>
     <div class="kpi-value">{ok}</div>
   </div>
-
   <div class="kpi-card">
     <div class="kpi-label">NG</div>
     <div class="kpi-value">{ng}</div>
   </div>
-
   <div class="kpi-card kpi-wide">
     <div class="kpi-label">Yield (%)</div>
     <div class="kpi-value kpi-value-yield">{yield_pct:.2f}</div>
@@ -1505,9 +1290,8 @@ with colA:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with colB:
-    # ✅ Airbag: se der qualquer erro na coluna direita, vira mensagem (não fica branco)
     try:
-        res = st.session_state.last_result
+        res = st.session_state.get("last_result")
 
         if res is not None:
             cls_esq = "roi-ok" if res.get("ok_esq", False) else "roi-ng"
@@ -1565,10 +1349,10 @@ with colB:
                 unsafe_allow_html=True
             )
 
-        if len(st.session_state.history) > 1:
+        if len(st.session_state.get("history", [])) > 1:
             with st.expander("📈 Qualidade (Gráficos)", expanded=False):
                 import pandas as pd
-                df = pd.DataFrame(st.session_state.history)
+                df = pd.DataFrame(st.session_state["history"])
                 df["ok_cum"] = df["aprovado"].cumsum()
                 df["yield_cum"] = 100.0 * df["ok_cum"] / df["n"]
 
@@ -1576,14 +1360,16 @@ with colB:
                 st.line_chart(df.set_index("n")[["yield_cum"]])
 
                 st.caption("Defeitos por lado (NG)")
-                defects = {"ESQ": int(st.session_state.cnt_ng_esq), "DIR": int(st.session_state.cnt_ng_dir)}
+                defects = {
+                    "ESQ": int(st.session_state.get("cnt_ng_esq", 0)),
+                    "DIR": int(st.session_state.get("cnt_ng_dir", 0))
+                }
                 st.bar_chart(defects)
 
     except Exception as e:
         st.error(f"Erro ao renderizar painel direito: {e}")
         if show_debug:
             st.exception(e)
-
 
 # ==========================================================
 # FOOTER
@@ -1601,5 +1387,5 @@ if show_debug:
     st.write("DEBUG:")
     st.write("selected_model_key:", st.session_state.get("selected_model_key"))
     st.write("selected_model_paths:", st.session_state.get("selected_model_paths"))
-    st.write("camera_on:", st.session_state.camera_on)
-    st.write("last_error:", st.session_state.last_error)
+    st.write("camera_on:", st.session_state.get("camera_on"))
+    st.write("last_error:", st.session_state.get("last_error"))
