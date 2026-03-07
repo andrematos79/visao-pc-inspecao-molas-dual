@@ -1,110 +1,246 @@
 # 🧠 Inspeção de Molas — DUAL (Visão Computacional)
 
-Sistema de **inspeção automática de molas** baseado em **Visão Computacional + Deep Learning**, desenvolvido para aplicação em **linha de produção**, com foco em **estabilidade, rastreabilidade e separação clara entre Operador e Engenharia**.
+Sistema de **inspeção automática de molas metálicas em covers de carregadores**, 
+baseado em **Visão Computacional + Deep Learning**, desenvolvido para aplicação 
+em **linhas de produção industriais**, com foco em **automação, rastreabilidade e confiabilidade**.
+
+O sistema integra **hardware de automação (Arduino + sensor de presença)** com 
+**inferência por rede neural convolucional (CNN)** e uma interface de operação baseada em **Streamlit**.
 
 ---
 
-## 📌 Visão Geral
+# 📌 Visão Geral
 
-O sistema realiza a inspeção simultânea de **duas molas (ESQ / DIR)** presentes em um cover de carregador, classificando cada amostra como **APROVADA (OK)** ou **REPROVADA (NG)** com base na probabilidade inferida por um modelo CNN treinado.
+O sistema realiza a inspeção simultânea de **duas molas metálicas (ESQ / DIR)** presentes em um cover de carregador.
 
-Principais características:
-- 🔍 Inspeção DUAL (ESQ + DIR)
-- 🧠 Modelo CNN em TensorFlow/Keras
-- 🎥 Captura via câmera USB / industrial
-- 🧑‍🏭 Modo Operador (produção)
-- 🛠️ Modo Engenharia (setup protegido por PIN)
-- 📊 KPIs de produção (Total, OK, NG, Yield)
-- 🗂️ Dataset estruturado automaticamente por produto
-- 🔄 Configuração **independente por modelo**
+Cada ROI é classificada por uma **CNN baseada em MobileNetV2** em três categorias:
+
+- ✅ **OK** → mola presente e bem posicionada  
+- ❌ **NG_MISSING** → mola ausente  
+- ⚠️ **NG_MISALIGNED** → mola presente porém desalinhada  
+
+A decisão final do produto utiliza uma **lógica DUAL conservadora**:
+
+> O produto é aprovado **apenas se ambas as regiões forem classificadas como OK**.
+
+---
+
+# 🧠 Classificação Multiclasse
+
+O modelo CNN possui **3 neurônios na camada de saída**:
+
+| Classe | Descrição |
+|------|------|
+| OK | Mola presente e corretamente alinhada |
+| NG_MISSING | Mola ausente |
+| NG_MISALIGNED | Mola presente porém desalinhada |
+
+Essa estratégia permite **diagnóstico mais preciso de defeitos**, importante para análise de processo e melhoria da produção.
+
+---
+
+# 🤖 Automação Industrial
+
+O sistema foi projetado para operar de forma **automatizada em linha de produção**.
+
+Fluxo operacional:
+
+1️⃣ Operador posiciona o cover no dispositivo  
+2️⃣ Sensor de presença detecta o produto  
+3️⃣ Arduino Uno envia trigger via serial  
+4️⃣ Sistema captura imagem automaticamente  
+5️⃣ CNN realiza inferência nas duas ROIs  
+6️⃣ Decisão DUAL é aplicada  
+7️⃣ Resultado exibido na interface  
+8️⃣ Dados registrados em log CSV / MES
+
+---
+
+# 🔌 Integração de Hardware
+
+Hardware utilizado:
+
+- Arduino Uno
+- Sensor de proximidade (ex: E18-D80NK)
+- Câmera USB / Industrial
+- PC industrial ou workstation
+
+O Arduino é responsável por:
+
+- Detectar presença do produto
+- Disparar a captura de imagem
+- Sincronizar inspeção com a linha de produção
 
 ---
 
 ## 🧩 Arquitetura do Sistema
 
-├── app_camera_infer_dual_freeze.py # App principal (Streamlit)
-├── models_registry.json # Cadastro de modelos/linhas
-├── config_molas.json # Configuração default (fallback)
-├── configs/ # Config por modelo (auto-gerado)
-├── labels.json # Classes do modelo
-├── assets/ # Logos e recursos visuais
-├── logs/ # Logs CSV por data
-├── dataset_products/ # Dataset de aprendizado (auto)
+├── app_camera_infer_dual_freeze.py
+├── models_registry.json
+├── config_molas.json
+├── configs/
+├── models/
+├── dataset_products/
+├── logs/
+├── assets/
+├── docs/
 └── requirements.txt
-
 
 ---
 
-## 👷‍♂️ Modos de Operação
+# 👷 Modos de Operação
 
-### 👷 Operador
-- Apenas **seleção do modelo**
+## 👷 Operador
+
+Interface simplificada para produção.
+
+Funções disponíveis:
+
+- Seleção do modelo
 - Captura + inferência
 - Visualização do resultado
 - KPIs de produção
-- ❌ Sem acesso a ROI, threshold ou configs
+- Rastreamento de lote
 
-### 🛠️ Engenharia (PIN protegido)
-- Ajuste de **ROI ESQ / DIR**
-- Ajuste de **threshold**
-- Normalização LAB
-- Salvamento de config por modelo
-- Captura de imagens para **dataset**
-- Geração de **split train/val/test**
-
-> 🔐 PIN padrão: `1234` (alterar em produção)
+Sem acesso a parâmetros críticos.
 
 ---
 
-## 🧠 Pipeline de Inferência
+## 🛠️ Engenharia (PIN protegido)
 
-1. Captura de frame da câmera
-2. Recorte das ROIs (%)
-3. (Opcional) Normalização LAB
-4. Inferência CNN
-5. Cálculo da probabilidade `mola_presente`
-6. Decisão por threshold
-7. Resultado final (OK / NG)
-8. Log CSV + atualização de KPIs
+Modo destinado a configuração do sistema.
+
+Permite:
+
+- Ajustar **ROI ESQ / DIR**
+- Ajustar **threshold de decisão**
+- Ativar normalização LAB
+- Capturar imagens para dataset
+- Criar **split train/val/test**
+- Ajustar parâmetros por produto
+
+🔐 PIN padrão: `1234`
+
 
 ---
 
-## 📊 Indicadores (KPIs)
+# 🧠 Pipeline de Inferência
+
+1️⃣ Captura do frame da câmera  
+2️⃣ Recorte das ROIs (ESQ / DIR)  
+3️⃣ Pré-processamento (opcional LAB normalization)  
+4️⃣ Inferência CNN (MobileNetV2)  
+5️⃣ Classificação multiclasse  
+6️⃣ Aplicação da lógica **DUAL decision**  
+7️⃣ Resultado final (OK / NG)  
+8️⃣ Registro de dados no log
+
+---
+
+# 📊 Indicadores de Produção (KPIs)
+
+A interface apresenta:
 
 - Total inspecionado
-- OK / NG
+- Quantidade OK
+- Quantidade NG
 - Yield (%)
-- Tempo de teste (s)
-- Histórico acumulado
-- Gráficos de tendência (Yield e defeitos por lado)
+- Histórico de inspeções
+- Defeitos por lado (ESQ / DIR)
 
 ---
 
-## 📁 Dataset de Aprendizado
+# 🧾 Rastreabilidade
 
-Estrutura automática por produto:
+O sistema permite rastrear cada unidade produzida.
 
-dataset_products/
-└── PRODUTO_X/
-├── raw/
-│ ├── ok/
-│ └── ng/
-├── roi/
-│ ├── ESQ/
-│ │ ├── mola_presente/
-│ │ └── mola_ausente/
-│ └── DIR/
-│ ├── mola_presente/
-│ └── mola_ausente/
-└── roi_split/
-├── ESQ/
-│ ├── train/
-│ ├── val/
-│ └── test/
-└── DIR/
-├── train/
-├── val/
-└── test/
+Campos registrados:
+
+- Timestamp
+- Modelo do produto
+- Resultado da inspeção
+- Classe inferida
+- Probabilidades da CNN
+- Serial Number (opcional)
+- Ordem de Produção
+- Operador
+
+Logs são armazenados em: logs/YYYY-MM-DD.csv
+
+---
+
+# 🏭 Integração MES (opcional)
+
+O sistema possui suporte para integração com **MES (Manufacturing Execution System)**.
+
+Quando habilitado:
+
+- Resultados podem ser enviados ao MES
+- Serial Number pode ser associado ao produto
+- Dados de produção podem ser sincronizados
+
+O MES pode ser ativado/desativado via interface.
+
+
+# 📦 Dataset de Treinamento
+
+O dataset utilizado neste projeto suporta **classificação multiclasse** para inspeção automática das molas metálicas presentes no cover do carregador.
+
+## Classes de inspeção
+
+- `OK` → mola presente e corretamente montada
+- `NG_MISSING` (`ng_ausente`) → mola ausente
+- `NG_MISALIGNED` (`ng_desalinhada`) → mola presente, porém desalinhada
+
+## Estrutura atual
+
+```text
+dataset/
+├── ok/
+├── ng_ausente/
+├── ng_desalinhada/
+├── split2/
+│   ├── train/
+│   │   ├── ok/
+│   │   ├── ng_ausente/
+│   │   └── ng_desalinhada/
+│   ├── val/
+│   │   ├── ok/
+│   │   ├── ng_ausente/
+│   │   └── ng_desalinhada/
+│   └── test/
+│       ├── ok/
+│       ├── ng_ausente/
+│       └── ng_desalinhada/
+└── split_aug/
+    ├── train/
+    │   ├── ok/
+    │   ├── ng_ausente/
+    │   └── ng_desalinhada/
+    ├── val/
+    │   ├── ok/
+    │   ├── ng_ausente/
+    │   └── ng_desalinhada/
+    └── test/
+        ├── ok/
+        ├── ng_ausente/
+        └── ng_desalinhada/
+
+Observação importante
+
+A organização do dataset foi projetada para suportar treinamento e avaliação de modelos CNN com classificação multiclasse, alinhada à versão mais recente do sistema e ao artigo científico associado ao projeto.
+
+Finalidade
+
+Essa estrutura permite treinar, validar e testar modelos CNN capazes de distinguir entre:
+
+condições normais de montagem
+
+ausência de mola
+
+desalinhamento da mola
+
+Essa abordagem é fundamental para aumentar a capacidade diagnóstica do sistema em ambiente industrial.
 
 
 ---
