@@ -1,0 +1,8 @@
+               precision    recall  f1-score   support
+
+           OK       0.00      0.00      0.00        23
+NG_MISALIGNED       0.60      1.00      0.75        34
+
+     accuracy                           0.60        57
+    macro avg       0.30      0.50      0.37        57
+ weighted avg       0.36      0.60      0.45        57

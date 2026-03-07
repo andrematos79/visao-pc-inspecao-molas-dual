@@ -1,7 +1,9 @@
 # Ambiente virtual
-.venv/
 venv/
-env/
+.venv/
+.venv_baseline/
+.venv_mnv2/
+.venv_svc/
 
 # Cache Python
 __pycache__/
@@ -23,6 +25,7 @@ Thumbs.db
 dataset/
 dataset_mola_roi_raw/
 dataset_mola_roi_split/
+dataset_products/
 archive/
 experiments/
 
@@ -40,6 +43,8 @@ logs/
 
 # Arquivos temporários / anotações locais
 infer_303_252ncia.txt
+*.tmp
+*.log
 
 # logs locais
 logs/
@@ -53,3 +58,10 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# resultados
+outputs_mobilenetv2/
+rigor_results_split2/
+
+# vscode
+.vscode/

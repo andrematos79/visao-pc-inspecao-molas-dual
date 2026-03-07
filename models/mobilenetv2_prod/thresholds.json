@@ -1,0 +1,6 @@
+{
+  "pos_class": "NG_MISALIGNED",
+  "pos_idx": 1,
+  "target_recall_ng": 0.9,
+  "th_ng": 0.0
+}
