@@ -1,0 +1,2 @@
+timestamp;modelo;turno;resultado_final;defect_esq;defect_dir;cs_code;cs_detail;p_esq;p_dir;th_presente;camera_index;directshow;source;total;ok;ng;yield_pct;test_time_sec;start_time;end_time
+2026-03-08 18:42:05;UNICORN_WHITE_15W;1;NG_MISSING;OK;NG_MISSING;NG_MISSING;ESQ=OK | DIR=NG_MISSING | th_pres=0.60;0.9902;0.0888;0.6000000000000001;0;True;button;1;0;1;0.0;2.510;2026-03-08 18:42:03;2026-03-08 18:42:05

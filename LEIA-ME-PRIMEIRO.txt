@@ -1,0 +1,24 @@
+PACOTE OFICIAL DE INSTALAÇÃO DO SVC
+Versão: v1.0.0 Stable
+Autor: André Gama de Matos
+
+Este pacote contém os arquivos oficiais necessários para instalação,
+configuração, validação e operação do Sistema de Visão Computacional (SVC)
+para inspeção de molas.
+
+ORDEM RECOMENDADA DE USO:
+
+1. Ler o documento:
+   02_DOCUMENTACAO\Manual de Instalação SVC Inspeção de Molas.pdf
+
+2. Criar o ambiente Python e instalar dependências:
+   05_SCRIPTS\instalar_ambiente.ps1
+
+3. Validar Arduino e sensor:
+   03_ARDUINO\README_ARDUINO.md
+
+4. Executar o sistema:
+   05_SCRIPTS\executar_svc.ps1
+
+5. Em caso de recuperação exata do PC homologado, utilizar:
+   01_APP\requirements_lock_prod.txt

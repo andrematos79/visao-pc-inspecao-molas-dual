@@ -1,0 +1,17 @@
+SVC – Industrial Vision System
+Version: v1.0.0 Stable
+Release type: Production baseline
+Release date: 2026
+
+Author:
+André Gama de Matos
+
+Context:
+Developed within the Professional Master's Program in
+Electrical Engineering – Embedded Systems
+Universidade do Estado do Amazonas (UEA)
+
+Description:
+Baseline version validated in production environment
+for automatic inspection of charger springs using
+computer vision and Arduino-triggered inference.

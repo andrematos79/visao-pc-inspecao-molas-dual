@@ -1,0 +1,2 @@
+timestamp;modelo;turno;resultado_final;cs_code;cs_detail;p_esq;p_dir;th_presente;camera_index;directshow;source;total;ok;ng;yield_pct;test_time_sec;start_time;end_time
+2026-02-26 16:11:19;UNICORN_WHITE_15W;1;OK;OK;OK;0.9823;0.9422;0.71;1;True;button;1;1;0;100.0;1.689;2026-02-26 16:11:17;2026-02-26 16:11:19

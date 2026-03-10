@@ -1,0 +1,28 @@
+BASELINE OFICIAL DO SVC
+
+Sistema: SVC – Inspeção Automática de Molas
+Versão: v1.0.0 Stable
+Status: Homologado
+Ano: 2026
+
+Autor do projeto:
+André Gama de Matos
+
+Contexto:
+Sistema desenvolvido no âmbito do Mestrado Profissional em Engenharia
+Elétrica – Sistemas Embarcados, Universidade do Estado do Amazonas (UEA).
+
+Descrição:
+Versão estável de referência para instalação em ambiente produtivo e
+replicação em novos computadores.
+
+Arquivos críticos desta baseline:
+- app_camera_infer_dual_freeze.py
+- modelo_molas.keras
+- config_molas.json
+- requirements.txt
+- requirements_lock_prod.txt
+
+Observação:
+Alterações nesta baseline devem ser versionadas e documentadas antes de
+uso em produção.

@@ -1,0 +1,13 @@
+# SVC Inspeção de Molas — curated production requirements
+# Baseado nas dependências importadas pelo app principal.
+# Para reprodutibilidade TOTAL do PC de produção, gere também um lock file
+# com: pip freeze > requirements_lock_prod.txt
+
+numpy
+opencv-python
+streamlit
+tensorflow
+pyserial
+pandas
+matplotlib
+streamlit-autorefresh
