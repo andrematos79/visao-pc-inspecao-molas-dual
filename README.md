@@ -3,6 +3,9 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19207171.svg)](https://doi.org/10.5281/zenodo.19207171)
 
+Latest version DOI: https://doi.org/10.5281/zenodo.19207171  
+Concept DOI (all versions): https://doi.org/10.5281/zenodo.19207170  
+
 Industrial computer vision system for automated inspection of springs in mobile phone chargers.
 
 This repository contains the validated industrial version of the SVC system used for automated quality inspection.
