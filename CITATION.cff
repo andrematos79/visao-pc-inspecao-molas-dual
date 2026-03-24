@@ -1,41 +1,30 @@
 cff-version: 1.2.0
+message: "Se você utilizar este software em pesquisa ou desenvolvimento, por favor cite este trabalho."
 title: "SVC – Sistema de Visão Computacional para Inspeção Automatizada de Molas em Carregadores"
-message: "Se você utilizar este repositório em pesquisa ou desenvolvimento, por favor cite este trabalho."
 type: software
 
 authors:
   - family-names: "Matos"
-    given-names: "Andre Gama de"
+    given-names: "A. G."
     affiliation: "Universidade do Estado do Amazonas (UEA)"
+
+version: "v1.0.1-industrial"
+date-released: 2026-03-24
 
 repository-code: "https://github.com/andrematos79/visao-pc-inspecao-molas-dual"
 
 abstract: >
   Sistema de visão computacional baseado em redes neurais convolucionais
   para inspeção automatizada de molas em carregadores de celular.
-  O sistema evoluiu de um protótipo acadêmico para uma versão
-  validada em ambiente industrial real.
+  O sistema evoluiu de protótipo acadêmico para versão validada
+  em ambiente industrial real.
 
 keywords:
   - computer vision
   - industrial inspection
-  - convolutional neural networks
   - deep learning
-  - quality control
-  - industry 4.0
+  - convolutional neural networks
   - manufacturing
+  - quality control
 
 license: "MIT"
-
-version: "1.0.0"
-date-released: "2026-03-24"
-
-preferred-citation:
-  type: thesis
-  authors:
-    - family-names: "Matos"
-      given-names: "Andre Gama de"
-  title: "Desenvolvimento e Validação de um Sistema de Visão Computacional Baseado em Redes Neurais Convolucionais para Inspeção Automatizada de Molas em Carregadores de Celular"
-  institution: "Universidade do Estado do Amazonas (UEA)"
-  year: 2026
-  language: "pt-BR"
