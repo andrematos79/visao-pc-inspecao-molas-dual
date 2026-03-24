@@ -88,6 +88,10 @@ Visualização do resultado + registro de produção
 
 O sistema também possui **disparo automático por sensor de proximidade conectado a um Arduino Uno**.
 
+
+![Arquitetura do SVC](docs/figures/svc_architecture_diagram.png)
+
+
 ---
 
 # Componentes de Hardware
@@ -276,7 +280,8 @@ As imagens foram organizadas em três classes:
 | NG_MISALIGNED | Mola presente porém desalinhada |
 
 Cada imagem contém duas regiões de interesse correspondentes às posições esquerda e direita da mola.
-
+Os testes experimentais foram conduzidos com 100 peças reais, distribuídas em 50 amostras OK, 30 NG_MISALIGNED e 20 NG_MISSING. Os resultados reforçam a aplicabilidade do sistema em ambiente industrial e sua evolução de protótipo laboratorial para solução validada em produção.
+![Validação industrial do SVC](docs/figures/svc_validation_results.png)
 ---
 
 ## Teste Experimental em Peças Reais
