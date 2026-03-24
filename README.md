@@ -1,483 +1,296 @@
-*********/
-# SVC – Computer Vision System for Spring Inspection
+# SVC -- Computer Vision System for Spring Inspection
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19207171.svg)](https://doi.org/10.5281/zenodo.19207171)
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Release](https://img.shields.io/badge/version-v1.0.1--industrial-orange)
 
-Latest version DOI: https://doi.org/10.5281/zenodo.19207171  
-Concept DOI (all versions): https://doi.org/10.5281/zenodo.19207170  
+Latest version DOI: https://doi.org/10.5281/zenodo.19207171\
+Concept DOI (all versions): https://doi.org/10.5281/zenodo.19207170
 
-Industrial computer vision system for automated inspection of springs in mobile phone chargers.
+Industrial computer vision system for automated inspection of springs in
+mobile phone chargers.
 
-This repository contains the validated industrial version of the SVC system used for automated quality inspection.
-## Visão Geral
+This repository contains the validated industrial version of the **SVC
+(Spring Vision Control)** system used for automated quality inspection
+in production environments.
+
+------------------------------------------------------------------------
 
-Este projeto apresenta um **sistema de visão computacional de baixo custo para inspeção automática de molas metálicas** instaladas dentro de carregadores de celular.
+# Overview
 
-O sistema utiliza:
+This project presents a **low‑cost computer vision system for automated
+inspection of metallic springs installed inside mobile phone chargers**.
 
-- **Câmera USB**
-- **Rede neural convolucional (MobileNetV2)**
-- **Lógica de decisão DUAL baseada em duas regiões de interesse (ROI)**
+The system combines:
 
-O objetivo é classificar automaticamente a **presença e o alinhamento das molas** no interior do produto.
+-   USB camera image acquisition
+-   Convolutional Neural Networks (MobileNetV2)
+-   Dual‑ROI industrial decision logic
+-   Real‑time operator interface
+-   Industrial traceability logging
 
-A solução foi desenvolvida no contexto do **Mestrado Profissional em Engenharia Elétrica – Sistemas Embarcados** da **Universidade do Estado do Amazonas (UEA)**.
+The objective is to automatically detect **spring presence and alignment
+defects** inside the charger housing.
 
-O sistema opera em **ambiente industrial real utilizando apenas CPU**, integrando hardware e software para inspeção automatizada em linha de produção.
+The solution was developed within the **Professional Master's Program in
+Electrical Engineering -- Embedded Systems** at the **Universidade do
+Estado do Amazonas (UEA)**.
 
-Este repositório representa a **versão final utilizada no chão de fábrica**, evoluindo de um **protótipo de laboratório para um sistema industrial validado em produção**.
+The system operates in **real industrial environments using CPU‑only
+inference**, integrating hardware and software for automated inline
+inspection.
 
----
+This repository represents the **validated industrial version deployed
+on the production floor**, evolving from a laboratory prototype into a
+production‑ready system.
 
-# Contexto Industrial
+------------------------------------------------------------------------
 
-Na produção de carregadores de celular, as molas internas são responsáveis pelo **contato elétrico adequado com os terminais do conector**.
+# Key Features
 
-Defeitos nessas molas podem causar:
+✔ Low‑cost industrial computer vision system\
+✔ CNN‑based inspection using MobileNetV2\
+✔ Dual‑ROI inspection strategy\
+✔ CPU‑only inference (no GPU required)\
+✔ Automatic triggering via proximity sensor\
+✔ Industrial operator interface using Streamlit\
+✔ Automatic dataset collection module\
+✔ Evidence logging for quality auditing\
+✔ Disk usage monitoring and retention policies\
+✔ Validated in real industrial environment
 
-- mau contato
-- falha de funcionamento
-- retrabalho ou descarte do produto
+------------------------------------------------------------------------
 
-Tradicionalmente essa inspeção é realizada manualmente por operadores, o que pode introduzir:
+# System Architecture
 
-- variabilidade humana
-- fadiga visual
-- inconsistência no critério de decisão
+The SVC system follows a modular architecture designed for industrial
+reliability.
 
-O **SVC (Sistema de Visão Computacional)** substitui essa inspeção manual por um **processo automatizado baseado em inteligência artificial**, aumentando a confiabilidade e repetibilidade da inspeção.
+Operational pipeline:
 
----
+USB Camera\
+↓\
+Image Acquisition\
+↓\
+ROI Extraction (Left / Right spring regions)\
+↓\
+CNN Classification (MobileNetV2)\
+↓\
+Dual Decision Logic\
+↓\
+Operator Interface + Production Logging
 
-# Evolução do Projeto
+The system also supports **automatic triggering using a proximity sensor
+connected to an Arduino Uno**.
 
-O sistema passou por duas fases principais de desenvolvimento.
+------------------------------------------------------------------------
 
-## Fase 1 – Protótipo de Laboratório
+# Hardware Components
 
-Nesta fase foram realizados:
+  Component         Description
+  ----------------- ----------------------------------
+  Computer          Windows 11 Pro
+  CPU               Intel Core i3 12th Gen or higher
+  RAM               8 GB or more
+  Camera            Industrial USB camera
+  Microcontroller   Arduino Uno
+  Sensor            E18‑D80NK proximity sensor
+  Interface         USB
 
-- criação inicial do dataset
-- experimentos com redes neurais convolucionais
-- validação do conceito de inspeção
-- desenvolvimento da lógica de decisão DUAL
+The sensor automatically triggers inspection when the product is
+positioned in front of the camera.
 
-## Fase 2 – Sistema Industrial
+------------------------------------------------------------------------
 
-Após validação inicial, o sistema foi adaptado para condições reais de produção:
+# Software Stack
 
-- variações de iluminação
-- posicionamento da câmera
-- fluxo contínuo da linha de produção
-- melhorias na interface do operador
-- ajustes de robustez para ambiente fabril
+  Software                Purpose
+  ----------------------- ---------------------------
+  Python                  Main programming language
+  TensorFlow / Keras      CNN inference
+  OpenCV                  Image processing
+  Streamlit               Operator interface
+  PySerial                Arduino communication
+  Pandas                  Production logging
+  Matplotlib              Visualization
+  Streamlit Autorefresh   Sensor monitoring
 
-A versão presente neste repositório corresponde à **versão estabilizada e validada na linha de produção**.
+------------------------------------------------------------------------
 
-Essa evolução representa um aumento significativo no **Technology Readiness Level (TRL)** do sistema.
+# Artificial Intelligence Model
 
----
+The inspection system uses **MobileNetV2 with Transfer Learning** for
+defect classification.
 
-# Arquitetura do Sistema
+### Model Classes
 
-O fluxo de operação do sistema é composto pelas seguintes etapas:
+  Class           Description
+  --------------- -------------------------------
+  OK              Spring correctly installed
+  NG_MISSING      Spring absent
+  NG_MISALIGNED   Spring present but misaligned
 
-Câmera USB  
-↓  
-Captura da imagem  
-↓  
-Extração das ROIs (Esquerda / Direita)  
-↓  
-Classificação com CNN MobileNetV2  
-↓  
-Lógica de decisão DUAL  
-↓  
-Visualização do resultado + registro de produção
+Each spring position is evaluated independently.
 
-O sistema também possui **disparo automático por sensor de proximidade conectado a um Arduino Uno**.
+------------------------------------------------------------------------
 
+# Dual Decision Logic
 
-![Arquitetura do SVC](docs/figures/svc_architecture_diagram.png)
+The final inspection decision follows a conservative industrial rule.
 
+A product is approved only if:
 
----
+ROI Left = OK\
+AND\
+ROI Right = OK
 
-# Componentes de Hardware
+If any side presents a defect, the product is rejected.
 
-| Componente | Descrição |
-|--------|--------|
-| Computador | Windows 11 Pro |
-| CPU | Intel Core i3 12ª geração ou superior |
-| RAM | 8 GB ou mais |
-| Câmera | Câmera USB industrial |
-| Microcontrolador | Arduino Uno |
-| Sensor | Sensor de proximidade E18-D80NK |
-| Interface | USB |
+This approach increases inspection reliability and reduces false
+positives.
 
-O sensor dispara automaticamente a inspeção quando o produto é posicionado diante da câmera.
+------------------------------------------------------------------------
 
----
+# Industrial Validation
 
-# Stack de Software
+The system was validated using **real products from the production
+line**.
 
-O sistema foi desenvolvido em Python utilizando bibliotecas modernas de visão computacional e aprendizado de máquina.
+### Dataset
 
-| Software | Função |
-|--------|--------|
-| Python | Linguagem principal |
-| TensorFlow / Keras | Inferência da rede neural |
-| OpenCV | Processamento de imagens |
-| Streamlit | Interface do operador |
-| PySerial | Comunicação com Arduino |
-| Pandas | Registro de produção |
-| Matplotlib | Visualização |
-| Streamlit Autorefresh | Monitoramento automático do sensor |
+The training dataset contains approximately **1170 real images**
+collected directly from the industrial inspection setup.
 
----
+### Experimental Test
 
-# Modelo de Inteligência Artificial
+A validation test was conducted with **100 real charger units**:
 
-O sistema utiliza **MobileNetV2 com Transfer Learning** para classificar o estado das molas.
+  Class           Quantity
+  --------------- ----------
+  OK              50
+  NG_MISALIGNED   30
+  NG_MISSING      20
 
-## Classes do Modelo
+The system performed:
 
-| Classe | Descrição |
-|------|------|
-| OK | Mola corretamente instalada |
-| NG_MISSING | Mola ausente |
-| NG_MISALIGNED | Mola presente porém desalinhada |
+-   automatic image acquisition
+-   ROI extraction
+-   CNN inference
+-   dual‑logic decision
+-   production logging
 
-Cada lado do produto é avaliado independentemente.
+### Performance
 
----
+Average processing time:
 
-# Lógica de Decisão DUAL
+1.93 seconds per unit
 
-A decisão final segue uma regra industrial conservadora.
+The system demonstrated reliable performance under real industrial
+conditions.
 
-O produto é aprovado somente se:
+------------------------------------------------------------------------
 
-ROI esquerda = OK  
-E  
-ROI direita = OK
+# Project Structure
 
-Se qualquer lado for classificado como defeito, o produto é rejeitado.
+    SVC_INSPECAO_MOLAS
+    │
+    ├── app_camera_infer_dual_freeze.py
+    ├── config_molas.json
+    ├── labels.json
+    ├── models_registry.json
+    ├── requirements.txt
+    │
+    ├── assets
+    │   └── logo_empresa.jpg
+    │
+    ├── configs
+    │   └── UNICORN_WHITE_15W.json
 
-Essa abordagem aumenta significativamente a confiabilidade da inspeção.
+------------------------------------------------------------------------
 
----
+# Installation
 
-# Modos de Operação
+Create project folder:
 
-## Modo Manual
+    C:\SVC_INSPECAO_MOLAS
 
-O operador dispara a inspeção manualmente.
+Create virtual environment:
 
-## Modo Automático
+    python -m venv .venv_svc
 
-A inspeção é disparada automaticamente pelo sensor **E18-D80NK conectado ao Arduino**.
+Activate environment:
 
-Mensagens enviadas via serial:
+    .\.venv_svc\Scripts\Activate.ps1
 
-PRESENT=0  
-PRESENT=1
+Install dependencies:
 
-A interface Streamlit monitora a porta serial e executa a inferência.
+    pip install -r requirements.txt
 
----
+------------------------------------------------------------------------
 
-# Recursos Industriais Avançados
+# Running the System
 
-## Coleta Automática de Dataset
+    streamlit run app_camera_infer_dual_freeze.py
 
-Durante o desenvolvimento inicial, a criação do dataset exigia **extração manual de prints da tela**, processo extremamente demorado.
+The operator interface will open automatically in the browser.
 
-Foi então implementado um **módulo automático de captura de dataset**.
+------------------------------------------------------------------------
 
-Esse recurso permite:
+# Sensor Connection
 
-- captura automática de imagens da câmera
-- salvamento automático das ROIs
-- geração de dataset durante a operação do sistema
+  Sensor Wire   Arduino
+  ------------- ---------------
+  Brown         5V
+  Blue          GND
+  Black         Digital Pin 2
 
-Isso reduziu o tempo de criação de datasets de **vários dias para poucas horas**.
+Serial communication: **115200 baud**
 
----
+------------------------------------------------------------------------
 
-## Recurso “Aprovado com Atenção”
+# Research Context
 
-O sistema detecta situações onde a classificação está **muito próxima do limite de decisão da rede neural**.
+This software was developed as part of research on **automated
+industrial inspection using computer vision and deep learning**.
 
-Exemplo:
+The project contributes to **smart manufacturing and Industry 4.0**,
+providing a low‑cost automated inspection solution for electronic
+manufacturing lines.
 
-Probabilidade = 0.51  
-Threshold = 0.50
+The system evolved from a **laboratory prototype to an industrially
+validated solution**, increasing its Technology Readiness Level (TRL).
 
-Nesse caso:
+------------------------------------------------------------------------
 
-- o produto é aprovado
-- o sistema sinaliza uma **aprovação no limite**
+# How to Cite
 
-Esse recurso ajuda a identificar **tendências de degradação do processo produtivo**.
+If you use this software in academic work, please cite:
 
----
+Matos, A. G. (2026).\
+**SVC -- Computer Vision System for Spring Inspection.**\
+Zenodo. https://doi.org/10.5281/zenodo.19207170
 
-## Registro de Evidências para Auditoria
+------------------------------------------------------------------------
 
-O sistema possui um módulo de **registro automático de evidências**.
-
-Imagens podem ser armazenadas quando:
-
-- defeitos são detectados
-- aprovações próximas do limite ocorrem
-- engenharia precisa investigar o processo
-
-As imagens são armazenadas em:
-
-C:\SVC_INSPECAO_MOLAS\dataset_auto_evidencias
-
-Isso permite:
-
-- auditoria de qualidade
-- análise de defeitos
-- expansão do dataset
-
----
-
-## Monitoramento de Uso de Disco
-
-Como o sistema pode salvar muitas imagens, foi implementado um **monitoramento automático do uso de disco**.
-
-O operador pode configurar um limite máximo de armazenamento.
-
-Quando esse limite é atingido, o sistema gera um alerta.
-
----
-
-## Política de Retenção com Auto Delete
-
-O sistema permite **exclusão automática de evidências antigas**.
-
-O tempo de retenção pode ser configurado para:
-
-- 30 dias
-- 60 dias
-- 90 dias
-
-Isso evita saturação de disco e garante operação contínua.
-
----
----
-
-# Resultados de Validação Industrial
-
-Após o desenvolvimento e treinamento do modelo, o sistema foi avaliado em condições representativas do ambiente industrial.
-
-## Dataset
-
-Para treinamento e validação do modelo foi utilizado um **dataset proprietário composto por aproximadamente 1170 imagens reais** capturadas diretamente da linha de produção.
-
-As imagens foram coletadas utilizando a mesma câmera utilizada no sistema final, garantindo consistência entre o ambiente de treinamento e operação.
-
-As imagens foram organizadas em três classes:
-
-| Classe | Descrição |
-|------|------|
-| OK | Mola corretamente posicionada |
-| NG_MISSING | Mola ausente |
-| NG_MISALIGNED | Mola presente porém desalinhada |
-
-Cada imagem contém duas regiões de interesse correspondentes às posições esquerda e direita da mola.
-Os testes experimentais foram conduzidos com 100 peças reais, distribuídas em 50 amostras OK, 30 NG_MISALIGNED e 20 NG_MISSING. Os resultados reforçam a aplicabilidade do sistema em ambiente industrial e sua evolução de protótipo laboratorial para solução validada em produção.
-![Validação industrial do SVC](docs/figures/svc_validation_results.png)
----
-
-## Teste Experimental em Peças Reais
-
-Após o treinamento, o sistema foi avaliado utilizando **100 unidades reais de carregadores**.
-
-Distribuição do conjunto de teste:
-
-| Classe | Quantidade |
-|------|------|
-| OK | 50 |
-| NG_MISALIGNED | 30 |
-| NG_MISSING | 20 |
-
-Durante o teste, o sistema executou:
-
-- captura automática de imagem
-- recorte das regiões de interesse
-- inferência da rede neural
-- aplicação da lógica DUAL
-- registro do resultado
-
----
-
-## Desempenho do Sistema
-
-Durante os testes experimentais foram observados os seguintes resultados:
-
-- **Alta acurácia de classificação**
-- detecção consistente de desalinhamentos
-- identificação confiável de ausência de mola
-
-A lógica **DUAL baseada em duas ROIs** mostrou-se particularmente eficaz para reduzir falsos positivos e aumentar a robustez do sistema.
-
----
-
-## Tempo de Ciclo
-
-O tempo médio de processamento observado foi aproximadamente:
-1.93 segundos por unidade
-
-
-Esse tempo inclui:
-
-- captura da imagem
-- processamento da rede neural
-- tomada de decisão
-- registro do resultado
-
-Esse desempenho é compatível com o fluxo de produção da linha.
-
----
-
-## Robustez em Ambiente Industrial
-
-Durante a operação na linha de produção, o sistema demonstrou robustez frente a:
-
-- variações de iluminação
-- pequenas variações de posicionamento do produto
-- ruído visual do ambiente industrial
-
-Os recursos adicionais implementados, como:
-
-- coleta automática de dataset  
-- registro de evidências  
-- monitoramento de disco  
-- política de retenção automática  
-
-contribuem para a **manutenção e evolução contínua do sistema**.
-
----
-
-## Impacto Industrial
-
-A substituição da inspeção manual por inspeção automatizada proporciona:
-
-- redução de variabilidade humana
-- aumento da repetibilidade da inspeção
-- maior rastreabilidade do processo
-- padronização do critério de decisão
-
-Esses fatores tornam o sistema adequado para aplicações industriais de inspeção visual automatizada.
-
----
-
-# Estrutura do Projeto
-
-SVC_INSPECAO_MOLAS
-│
-├── app_camera_infer_dual_freeze.py
-├── config_molas.json
-├── labels.json
-├── labels_L2.json
-├── models_registry.json
-├── requirements.txt
-│
-├── assets
-│ └── logo_empresa.jpg
-│
-├── configs
-│ └── UNICORN_WHITE_15W.json
-
----
-
-# Instalação
-
-Criar pasta do projeto:
-
-C:\SVC_INSPECAO_MOLAS
-
-Criar ambiente virtual:
-
-python -m venv .venv_svc
-
-Ativar ambiente:
-
-.\.venv_svc\Scripts\Activate.ps1
-
-Instalar dependências:
-
-pip install -r requirements.txt
-
----
-
-# Execução do Sistema
-
-streamlit run app_camera_infer_dual_freeze.py
-
-A interface será aberta automaticamente no navegador.
-
----
-
-# Conexão do Sensor
-
-| Fio do Sensor | Arduino |
-|------|------|
-| Marrom | 5V |
-| Azul | GND |
-| Preto | Pino Digital 2 |
-
-Comunicação serial: **115200 baud**
-
----
-
-# Principais Características
-
-✔ Solução industrial de baixo custo  
-✔ Inferência apenas em CPU  
-✔ Inspeção com duas ROIs  
-✔ Classificação multiclasse  
-✔ Disparo automático via Arduino  
-✔ Coleta automática de dataset  
-✔ Registro de evidências  
-✔ Monitoramento de uso de disco  
-✔ Política automática de retenção  
-✔ Detecção de aprovação no limite  
-✔ Registro de produção  
-✔ Sistema validado em ambiente industrial  
-
----
-
-# Autor
+# Author
 
 **André Gama de Matos**
 
-Engenheiro – Visão Computacional e Sistemas Embarcados  
+Engineer -- Computer Vision and Embedded Systems
 
-Mestrado Profissional em Engenharia Elétrica – Sistemas Embarcados  
-Universidade do Estado do Amazonas – UEA
+Professional Master's in Electrical Engineering -- Embedded Systems\
+Universidade do Estado do Amazonas (UEA)
 
-Orientador:  
-Prof. Dr. Carlos Maurício Seródio Figueiredo  
+Advisor:\
+Prof. Dr. Carlos Maurício Seródio Figueiredo
 
-Coorientador:  
-Prof. Dr. Jozias Parente de Oliveira
+Co‑Advisor:\
+Prof. Dr. Jozias Parente de Oliveira
 
----
+------------------------------------------------------------------------
 
-# Contexto Acadêmico
+# License
 
-Este sistema foi desenvolvido no contexto da dissertação:
-
-**Sistema de Visão Computacional para Inspeção Automatizada de Molas em Carregadores de Celular**
-
-O trabalho investiga a aplicação de **deep learning e sistemas embarcados para inspeção industrial automatizada**.
-
----
-
-# Licença
-
-Projeto destinado a fins **acadêmicos e de pesquisa industrial**.
+MIT License -- Open source software for research and industrial
+experimentation.
