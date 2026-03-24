@@ -1,0 +1,27 @@
+# Ambiente virtual
+.venv_svc/
+venv/
+.env
+
+# Datasets
+dataset/
+dataset_auto_evidencias/
+dataset_coleta/
+dataset_coleta_industrial/
+dataset_mola_roi_raw/
+dataset_mola_roi_split/
+dataset_products/
+
+# Logs e experimentos
+logs/
+experiments/
+
+# Modelos pesados
+models/
+
+# Pastas locais
+Disco Local/
+
+# Sistema
+.DS_Store
+Thumbs.db

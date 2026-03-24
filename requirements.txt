@@ -1,0 +1,10 @@
+streamlit
+tensorflow
+keras
+opencv-python
+pandas
+matplotlib
+pillow
+pyserial
+streamlit-autorefresh
+numpy
