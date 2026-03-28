@@ -24,6 +24,7 @@ import re
 import os
 import csv
 import io
+import base64
 import time
 import random
 import shutil
@@ -347,7 +348,7 @@ def create_inspection_xml(
     production_order: str,
     serial_number: str,
     model_name: str,
-    shift: str,
+    line_name: str,
     operation_mode: str,
     result_left: str,
     result_right: str,
@@ -369,7 +370,7 @@ def create_inspection_xml(
         "production_order": production_order or "",
         "serial_number": serial_number or "",
         "model_name": model_name or "",
-        "shift": str(shift),
+        "line": str(line_name),
         "operation_mode": operation_mode or "",
         "source": source or "",
         "result_left": result_left or "",
@@ -393,7 +394,7 @@ def append_trace_log_csv(row: dict):
     fieldnames = [
         "timestamp", "inspection_id", "system_name", "equipment_id",
         "mes_enabled", "traceability_enabled", "production_order", "serial_number",
-        "model_name", "shift", "operation_mode", "source",
+        "model_name", "line", "operation_mode", "source",
         "result_left", "result_right", "final_result",
         "confidence_left", "confidence_right",
         "image_path", "xml_path", "mes_status",
@@ -438,7 +439,7 @@ def render_production_dashboard() -> None:
 
     op = str(st.session_state.get("production_order", "")).strip() or "---"
     model_name = str(st.session_state.get("selected_model_key", "MODELO_PADRAO"))
-    shift = str(st.session_state.get("shift", "1"))
+    line_name = str(st.session_state.get("line_name", "L01"))
     equipment_id = str(st.session_state.get("equipment_id", "SVC01")).strip() or "---"
     mes_txt = "ATIVO" if bool(st.session_state.get("mes_enabled", False)) else "DESLIGADO"
     trace_txt = "ATIVA" if bool(st.session_state.get("traceability_enabled", False)) else "DESLIGADA"
@@ -448,7 +449,7 @@ def render_production_dashboard() -> None:
       <div style="display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;line-height:1.1;">
         <div style="font-size:11px;font-weight:700;color:#111827;">OP: <span style="font-weight:800;">{op}</span></div>
         <div style="font-size:11px;font-weight:700;color:#111827;">MODELO: <span style="font-weight:800;">{model_name}</span></div>
-        <div style="font-size:11px;font-weight:700;color:#111827;">TURNO: <span style="font-weight:800;">{shift}</span></div>
+        <div style="font-size:11px;font-weight:700;color:#111827;">LINHA: <span style="font-weight:800;">{line_name}</span></div>
         <div style="font-size:11px;font-weight:700;color:#111827;">EQUIP.: <span style="font-weight:800;">{equipment_id}</span></div>
         <div style="font-size:11px;font-weight:700;color:#111827;">MES: <span style="font-weight:800;">{mes_txt}</span></div>
         <div style="font-size:11px;font-weight:700;color:#111827;">RASTREAB.: <span style="font-weight:800;">{trace_txt}</span></div>
@@ -482,6 +483,7 @@ MODEL_PATH = BASE_DIR / "modelo_molas.keras"
 LABELS_PATH = BASE_DIR / "labels.json"
 CONFIG_PATH = BASE_DIR / "config_molas.json"
 REGISTRY_PATH = BASE_DIR / "models_registry.json"
+EMAIL_CONFIG_PATH = BASE_DIR / "config_email.json"
 
 IMG_SIZE = (224, 224)
 DEFAULT_THRESH_PRESENTE = 0.80
@@ -861,8 +863,8 @@ def init_session():
     st.session_state.setdefault("selected_model_key", "MODELO_PADRAO")
     st.session_state.setdefault("product_model", st.session_state.get("selected_model_key", "MODELO_PADRAO"))
 
-    # turnos
-    st.session_state.setdefault("shift", 1)
+    # linha de produção
+    st.session_state.setdefault("line_name", "L01")
 
     # MES / rastreabilidade
     st.session_state.setdefault("mes_enabled", False)
@@ -878,6 +880,28 @@ def init_session():
     # aprendizado
     st.session_state.setdefault("learning_last_saved", None)
 
+    # relatórios
+    st.session_state.setdefault("production_started_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    st.session_state.setdefault("last_report_pdf", "")
+    st.session_state.setdefault("last_report_html", "")
+    st.session_state.setdefault("last_report_generated_at", "")
+
+    # e-mail / SMTP
+    st.session_state.setdefault("email_reports_enabled", False)
+    st.session_state.setdefault("email_send_on_generate", False)
+    st.session_state.setdefault("email_auto_daily_enabled", False)
+    st.session_state.setdefault("email_daily_time", "17:30")
+    st.session_state.setdefault("email_to", "")
+    st.session_state.setdefault("email_cc", "")
+    st.session_state.setdefault("email_bcc", "")
+    st.session_state.setdefault("email_subject_prefix", "[SVC] Relatório de Auditoria")
+    st.session_state.setdefault("email_sender_name", "SVC Inspeção de Molas")
+    st.session_state.setdefault("smtp_server", "smtp.office365.com")
+    st.session_state.setdefault("smtp_port", 587)
+    st.session_state.setdefault("smtp_user", "")
+    st.session_state.setdefault("smtp_use_tls", True)
+    st.session_state.setdefault("email_config_loaded", False)
+
     # evidências / auditoria
     st.session_state.setdefault("evidence_auto_enabled", True)
     st.session_state.setdefault("evidence_save_ok_limit", True)
@@ -891,6 +915,28 @@ def init_session():
     st.session_state.setdefault("evidence_last_manual", None)
     st.session_state.setdefault("evidence_last_auto_signature", None)
     st.session_state.setdefault("evidence_last_auto_ts", 0.0)
+
+    # auditoria detalhada
+    st.session_state.setdefault("cnt_missing_esq", 0)
+    st.session_state.setdefault("cnt_missing_dir", 0)
+    st.session_state.setdefault("cnt_missing_both", 0)
+    st.session_state.setdefault("cnt_misaligned_esq", 0)
+    st.session_state.setdefault("cnt_misaligned_dir", 0)
+    st.session_state.setdefault("cnt_misaligned_both", 0)
+    st.session_state.setdefault("cnt_misto", 0)
+    st.session_state.setdefault("cnt_ok_attention", 0)
+
+    # coleta manual detalhada para dataset (modo Engenharia)
+    st.session_state.setdefault("manual_cnt_ok_perfeita", 0)
+    st.session_state.setdefault("manual_cnt_desalinhada_esq", 0)
+    st.session_state.setdefault("manual_cnt_desalinhada_dir", 0)
+    st.session_state.setdefault("manual_cnt_desalinhada_both", 0)
+    st.session_state.setdefault("manual_cnt_faltando_esq", 0)
+    st.session_state.setdefault("manual_cnt_faltando_dir", 0)
+    st.session_state.setdefault("manual_cnt_faltando_both", 0)
+    st.session_state.setdefault("manual_cnt_misto_des_esq_falt_dir", 0)
+    st.session_state.setdefault("manual_cnt_misto_falt_esq_des_dir", 0)
+    st.session_state.setdefault("manual_last_saved_detail", "")
 
 init_session()
 
@@ -923,6 +969,67 @@ def load_json(path: Path) -> dict:
 
 def save_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def load_email_config() -> dict:
+    try:
+        if EMAIL_CONFIG_PATH.exists():
+            data = json.loads(EMAIL_CONFIG_PATH.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+def save_email_config(payload: dict) -> None:
+    EMAIL_CONFIG_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def apply_email_config_to_session(cfg: dict) -> None:
+    if not isinstance(cfg, dict):
+        return
+    st.session_state["email_reports_enabled"] = bool(cfg.get("email_reports_enabled", False))
+    st.session_state["email_send_on_generate"] = bool(cfg.get("email_send_on_generate", False))
+    st.session_state["email_auto_daily_enabled"] = bool(cfg.get("email_auto_daily_enabled", False))
+    st.session_state["email_daily_time"] = str(cfg.get("email_daily_time", "17:30"))
+    st.session_state["email_to"] = str(cfg.get("email_to", ""))
+    st.session_state["email_cc"] = str(cfg.get("email_cc", ""))
+    st.session_state["email_bcc"] = str(cfg.get("email_bcc", ""))
+    st.session_state["email_subject_prefix"] = str(cfg.get("email_subject_prefix", "[SVC] Relatório de Auditoria"))
+    st.session_state["email_sender_name"] = str(cfg.get("email_sender_name", "SVC Inspeção de Molas"))
+    st.session_state["smtp_server"] = str(cfg.get("smtp_server", "smtp.office365.com"))
+    try:
+        st.session_state["smtp_port"] = int(cfg.get("smtp_port", 587))
+    except Exception:
+        st.session_state["smtp_port"] = 587
+    st.session_state["smtp_user"] = str(cfg.get("smtp_user", ""))
+    st.session_state["smtp_use_tls"] = bool(cfg.get("smtp_use_tls", True))
+
+
+def collect_email_config_from_session() -> dict:
+    return {
+        "email_reports_enabled": bool(st.session_state.get("email_reports_enabled", False)),
+        "email_send_on_generate": bool(st.session_state.get("email_send_on_generate", False)),
+        "email_auto_daily_enabled": bool(st.session_state.get("email_auto_daily_enabled", False)),
+        "email_daily_time": str(st.session_state.get("email_daily_time", "17:30")),
+        "email_to": str(st.session_state.get("email_to", "")).strip(),
+        "email_cc": str(st.session_state.get("email_cc", "")).strip(),
+        "email_bcc": str(st.session_state.get("email_bcc", "")).strip(),
+        "email_subject_prefix": str(st.session_state.get("email_subject_prefix", "[SVC] Relatório de Auditoria")).strip(),
+        "email_sender_name": str(st.session_state.get("email_sender_name", "SVC Inspeção de Molas")).strip(),
+        "smtp_server": str(st.session_state.get("smtp_server", "smtp.office365.com")).strip(),
+        "smtp_port": int(st.session_state.get("smtp_port", 587)),
+        "smtp_user": str(st.session_state.get("smtp_user", "")).strip(),
+        "smtp_use_tls": bool(st.session_state.get("smtp_use_tls", True)),
+    }
+
+
+def email_status_summary() -> str:
+    enabled = bool(st.session_state.get("email_reports_enabled", False))
+    if not enabled:
+        return "E-mail: DESLIGADO"
+    to_count = len([x for x in re.split(r'[;,]+', str(st.session_state.get("email_to", ""))) if x.strip()])
+    return f"E-mail: ATIVO | Destinatários: {to_count}"
 
 def get_effective_config(model_key: str) -> dict:
     """
@@ -1003,6 +1110,10 @@ def collect_config_from_session() -> dict:
 if ("threshold_presente" not in st.session_state) or ("threshold_ng_ok" not in st.session_state) or ("threshold_ng_ng" not in st.session_state):
     apply_config_to_session(get_effective_config(st.session_state.get("selected_model_key", "MODELO_PADRAO")))
 
+if not st.session_state.get("email_config_loaded", False):
+    apply_email_config_to_session(load_email_config())
+    st.session_state["email_config_loaded"] = True
+
 # ==========================================================
 # DATASET (APRENDIZADO) — CAPTURA E SALVAMENTO
 # ==========================================================
@@ -1015,11 +1126,14 @@ DATASET_ROOT.mkdir(exist_ok=True)
 EVIDENCE_DIR = BASE_DIR / "dataset_coleta_industrial"
 AUTO_EVIDENCE_DIR = BASE_DIR / "dataset_auto_evidencias"
 AUDIT_LOG_PATH = LOG_DIR / "evidence_audit_log.csv"
+REPORTS_DIR = BASE_DIR / "reports"
+REPORTS_DIR.mkdir(exist_ok=True)
 
 MANUAL_EVIDENCE_CLASSES = {
     "OK": EVIDENCE_DIR / "OK",
     "NG_DESALINHADO": EVIDENCE_DIR / "NG_DESALINHADO",
     "NG_FALTANDO": EVIDENCE_DIR / "NG_FALTANDO",
+    "NG_MISTO": EVIDENCE_DIR / "NG_MISTO",
 }
 
 AUTO_EVIDENCE_CLASSES = {
@@ -1078,6 +1192,141 @@ def list_recent_files(folder: Path, limit: int = 8) -> list[Path]:
     files.sort(key=lambda x: x[0], reverse=True)
     return [p for _, p in files[:limit]]
 
+
+def get_disk_status(path: Path) -> dict:
+    try:
+        usage = shutil.disk_usage(str(path))
+        total_gb = usage.total / (1024 ** 3)
+        free_gb = usage.free / (1024 ** 3)
+        used_gb = usage.used / (1024 ** 3)
+        return {
+            "total_bytes": int(usage.total),
+            "used_bytes": int(usage.used),
+            "free_bytes": int(usage.free),
+            "total_gb": float(total_gb),
+            "used_gb": float(used_gb),
+            "free_gb": float(free_gb),
+        }
+    except Exception:
+        return {
+            "total_bytes": 0,
+            "used_bytes": 0,
+            "free_bytes": 0,
+            "total_gb": 0.0,
+            "used_gb": 0.0,
+            "free_gb": 0.0,
+        }
+
+
+def disk_free_status_label(free_gb: float, warn_gb: float = 10.0, critical_gb: float = 5.0) -> tuple[str, str]:
+    if free_gb <= critical_gb:
+        return "critical", "CRÍTICO"
+    if free_gb <= warn_gb:
+        return "warning", "ATENÇÃO"
+    return "ok", "NORMAL"
+
+
+def defect_to_pt(code: str) -> str:
+    code = str(code or "OK").strip().upper()
+    mapping = {
+        "OK": "OK",
+        "NG_MISSING": "FALTANDO",
+        "NG_MISALIGNED": "DESALINHADA",
+    }
+    return mapping.get(code, code)
+
+
+def build_defect_detail_code(res: dict | None) -> str:
+    res = res or {}
+    de = str(res.get("defect_esq", "OK") or "OK").strip().upper()
+    dd = str(res.get("defect_dir", "OK") or "OK").strip().upper()
+
+    if de == "OK" and dd == "OK":
+        return "OK_ATENCAO" if bool(res.get("attention_flag", False)) else "OK"
+    if de == "NG_MISSING" and dd == "OK":
+        return "FALTANDO_ESQ"
+    if de == "OK" and dd == "NG_MISSING":
+        return "FALTANDO_DIR"
+    if de == "NG_MISSING" and dd == "NG_MISSING":
+        return "FALTANDO_BOTH"
+    if de == "NG_MISALIGNED" and dd == "OK":
+        return "DESALINHADA_ESQ"
+    if de == "OK" and dd == "NG_MISALIGNED":
+        return "DESALINHADA_DIR"
+    if de == "NG_MISALIGNED" and dd == "NG_MISALIGNED":
+        return "DESALINHADA_BOTH"
+
+    left = defect_to_pt(de)
+    right = defect_to_pt(dd)
+    return f"MISTO_{left}_ESQ_{right}_DIR"
+
+
+def get_audit_counts_from_session() -> dict:
+    return {
+        "faltando_esq": int(st.session_state.get("cnt_missing_esq", 0)),
+        "faltando_dir": int(st.session_state.get("cnt_missing_dir", 0)),
+        "faltando_both": int(st.session_state.get("cnt_missing_both", 0)),
+        "desalinhada_esq": int(st.session_state.get("cnt_misaligned_esq", 0)),
+        "desalinhada_dir": int(st.session_state.get("cnt_misaligned_dir", 0)),
+        "desalinhada_both": int(st.session_state.get("cnt_misaligned_both", 0)),
+        "misto": int(st.session_state.get("cnt_misto", 0)),
+        "ok_atencao": int(st.session_state.get("cnt_ok_attention", 0)),
+    }
+
+
+MANUAL_DETAIL_COUNTER_KEYS = {
+    "OK": "manual_cnt_ok_perfeita",
+    "DESALINHADA_ESQ": "manual_cnt_desalinhada_esq",
+    "DESALINHADA_DIR": "manual_cnt_desalinhada_dir",
+    "DESALINHADA_BOTH": "manual_cnt_desalinhada_both",
+    "FALTANDO_ESQ": "manual_cnt_faltando_esq",
+    "FALTANDO_DIR": "manual_cnt_faltando_dir",
+    "FALTANDO_BOTH": "manual_cnt_faltando_both",
+    "MISTO_DESALINHADA_ESQ_FALTANDO_DIR": "manual_cnt_misto_des_esq_falt_dir",
+    "MISTO_FALTANDO_ESQ_DESALINHADA_DIR": "manual_cnt_misto_falt_esq_des_dir",
+}
+
+
+def inc_manual_detail_counter(detail_code: str) -> None:
+    key = MANUAL_DETAIL_COUNTER_KEYS.get(str(detail_code or '').strip().upper())
+    if key:
+        st.session_state[key] = int(st.session_state.get(key, 0)) + 1
+
+
+def get_manual_detail_counts() -> dict:
+    return {
+        detail: int(st.session_state.get(key, 0))
+        for detail, key in MANUAL_DETAIL_COUNTER_KEYS.items()
+    }
+
+
+def manual_detail_human(detail_code: str) -> str:
+    mapping = {
+        "OK": "OK (ambas perfeitas)",
+        "DESALINHADA_ESQ": "Desalinhado ESQ / DIR OK",
+        "DESALINHADA_DIR": "ESQ OK / DIR desalinhado",
+        "DESALINHADA_BOTH": "Ambos desalinhados",
+        "FALTANDO_ESQ": "ESQ faltando / DIR OK",
+        "FALTANDO_DIR": "ESQ OK / DIR faltando",
+        "FALTANDO_BOTH": "Ambas faltando",
+        "MISTO_DESALINHADA_ESQ_FALTANDO_DIR": "ESQ desalinhado / DIR faltando",
+        "MISTO_FALTANDO_ESQ_DESALINHADA_DIR": "ESQ faltando / DIR desalinhado",
+    }
+    return mapping.get(str(detail_code or '').strip().upper(), str(detail_code or ''))
+
+
+def manual_label_from_detail(detail_code: str) -> str:
+    dc = str(detail_code or '').strip().upper()
+    if dc == 'OK':
+        return 'OK'
+    if dc.startswith('DESALINHADA_'):
+        return 'NG_DESALINHADO'
+    if dc.startswith('FALTANDO_'):
+        return 'NG_FALTANDO'
+    if dc.startswith('MISTO_'):
+        return 'NG_MISTO'
+    return 'OK'
+
 def draw_roi_overlay(frame_bgr: np.ndarray) -> np.ndarray:
     img = frame_bgr.copy()
     if img is None or img.size == 0:
@@ -1100,7 +1349,7 @@ def draw_roi_overlay(frame_bgr: np.ndarray) -> np.ndarray:
 
 def append_evidence_audit_csv(row: dict):
     fieldnames = [
-        "timestamp", "inspection_id", "source", "saved_class", "final_result",
+        "timestamp", "inspection_id", "source", "saved_class", "detail_code", "final_result",
         "attention_flag", "confidence_proxy", "p_pres_esq", "p_pres_dir",
         "prob_ng_esq", "prob_ng_dir", "decision_band_esq", "decision_band_dir",
         "production_order", "serial_number", "model_name", "image_path",
@@ -1155,11 +1404,14 @@ def save_evidence_bundle(save_root: Path, label: str, reason: str, source: str, 
         cv2.imwrite(str(roi_dir_path), roi_dir, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
 
     confidence_proxy = float(max(result.get("prob_ng_esq", 0.0), result.get("prob_ng_dir", 0.0), 0.0))
+    detail_code = build_defect_detail_code(result)
+
     metadata = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "inspection_id": inspection_id,
         "source": source,
         "saved_class": label,
+        "saved_detail": detail_code,
         "reason": reason,
         "production_order": str(st.session_state.get("production_order", "")).strip(),
         "serial_number": serial_number,
@@ -1198,6 +1450,7 @@ def save_evidence_bundle(save_root: Path, label: str, reason: str, source: str, 
         "inspection_id": inspection_id,
         "source": source,
         "saved_class": label,
+        "detail_code": detail_code,
         "final_result": result.get("defect_type", ""),
         "attention_flag": bool(result.get("attention_flag", False)),
         "confidence_proxy": f"{confidence_proxy:.6f}",
@@ -1285,18 +1538,24 @@ def auto_save_current_result_if_needed(res: dict, frame_bgr: np.ndarray | None =
     now_ts = time.time()
     if current_signature == last_signature and (now_ts - last_ts) < 1.2:
         return None
-    saved = save_evidence_bundle(AUTO_EVIDENCE_CLASSES[label], label, reason, source, result=res, frame_bgr=frame_bgr)
+    detail_code = build_defect_detail_code(res)
+    target_dir = AUTO_EVIDENCE_CLASSES[label] / detail_code
+    saved = save_evidence_bundle(target_dir, label, reason, source, result=res, frame_bgr=frame_bgr)
     st.session_state["evidence_last_auto_signature"] = current_signature
     st.session_state["evidence_last_auto_ts"] = now_ts
     st.session_state["evidence_last_saved"] = saved
     return saved
 
-def save_manual_current_result(label: str) -> dict:
-    final_label = str(label or "OK").strip().upper()
-    folder = MANUAL_EVIDENCE_CLASSES[final_label]
-    reason = f"Salvamento manual pelo operador/engenharia: {final_label}"
-    saved = save_evidence_bundle(folder, final_label, reason, "manual", result=st.session_state.get("last_result"), frame_bgr=st.session_state.get("display_frame"))
+def save_manual_current_result(label: str | None = None, detail_override: str | None = None) -> dict:
+    result = st.session_state.get("last_result") or {}
+    detail_code = str(detail_override or build_defect_detail_code(result)).strip().upper()
+    final_label = str(label or manual_label_from_detail(detail_code)).strip().upper()
+    folder = MANUAL_EVIDENCE_CLASSES[final_label] / detail_code
+    reason = f"Salvamento manual pelo operador/engenharia: {final_label} / {detail_code}"
+    saved = save_evidence_bundle(folder, final_label, reason, "manual", result=result, frame_bgr=st.session_state.get("display_frame"))
     st.session_state["evidence_last_manual"] = saved
+    st.session_state["manual_last_saved_detail"] = detail_code
+    inc_manual_detail_counter(detail_code)
     return saved
 
 def safe_slug(s: str) -> str:
@@ -1846,7 +2105,7 @@ def append_log_csv(row: dict):
     log_path = LOG_DIR / f"inspecao_molas_{today}.csv"
 
     fieldnames = [
-        "timestamp", "modelo", "turno", "resultado_final",
+        "timestamp", "modelo", "linha", "resultado_final",
         "defect_esq", "defect_dir",
         "cs_code", "cs_detail", "p_esq", "p_dir", "th_presente",
         "camera_index", "directshow", "source",
@@ -1915,6 +2174,184 @@ def get_cs_code(res: dict, th: float) -> tuple[str, str]:
     if ok_esq and (not ok_dir):
         return "NG_DIR", f"p_dir<{th:.2f}"
     return "NG_AMBAS", f"p_esq<{th:.2f} | p_dir<{th:.2f}"
+
+
+
+def report_summary_snapshot() -> dict:
+    total = int(st.session_state.get("cnt_total", 0))
+    ok = int(st.session_state.get("cnt_ok", 0))
+    ng = int(st.session_state.get("cnt_ng", 0))
+    yield_pct = (ok / total * 100.0) if total > 0 else 0.0
+    audit = get_audit_counts_from_session()
+    return {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "period_start": str(st.session_state.get("production_started_at", "---")),
+        "line_name": str(st.session_state.get("line_name", "L01")),
+        "equipment_id": str(st.session_state.get("equipment_id", "SVC01")),
+        "model_name": str(st.session_state.get("selected_model_key", "MODELO_PADRAO")),
+        "production_order": str(st.session_state.get("production_order", "")).strip() or "---",
+        "inspection_id": str(st.session_state.get("last_inspection_id", "")).strip() or "---",
+        "total": total,
+        "ok": ok,
+        "ng": ng,
+        "yield_pct": yield_pct,
+        "audit": audit,
+    }
+
+
+def _save_report_charts(snapshot: dict, stamp: str) -> list[Path]:
+    charts = []
+    if not HAS_MPL:
+        return charts
+    import matplotlib.pyplot as plt
+
+    # Chart 1: OK vs NG
+    fig = plt.figure(figsize=(6, 4))
+    plt.bar(["OK", "NG"], [snapshot["ok"], snapshot["ng"]])
+    plt.ylabel("Quantidade")
+    plt.title("Resumo de Produção")
+    p1 = REPORTS_DIR / f"audit_report_{stamp}_ok_ng.png"
+    fig.savefig(p1, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+    charts.append(p1)
+
+    # Chart 2: tipos de falha
+    audit = snapshot["audit"]
+    labels = [
+        "Falt. ESQ", "Falt. DIR", "Falt. BOTH",
+        "Des. ESQ", "Des. DIR", "Des. BOTH",
+        "Misto", "OK atenção"
+    ]
+    values = [
+        audit["faltando_esq"], audit["faltando_dir"], audit["faltando_both"],
+        audit["desalinhada_esq"], audit["desalinhada_dir"], audit["desalinhada_both"],
+        audit["misto"], audit["ok_atencao"],
+    ]
+    fig = plt.figure(figsize=(8, 4))
+    plt.bar(labels, values)
+    plt.ylabel("Ocorrências")
+    plt.title("Detalhamento de Falhas")
+    plt.xticks(rotation=25, ha='right')
+    p2 = REPORTS_DIR / f"audit_report_{stamp}_falhas.png"
+    fig.savefig(p2, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+    charts.append(p2)
+    return charts
+
+
+def _build_report_html(snapshot: dict) -> str:
+    audit = snapshot["audit"]
+    return f"""<!DOCTYPE html>
+<html lang="pt-br"><head><meta charset="utf-8"><title>Resumo Relatório de Auditoria</title></head>
+<body style="font-family:Arial,sans-serif;font-size:14px;color:#111827;">
+  <h2 style="margin-bottom:8px;">Resumo do Relatório de Auditoria – SVC Inspeção de Molas</h2>
+  <p><b>Emitido em:</b> {snapshot['generated_at']}<br>
+     <b>Período:</b> {snapshot['period_start']} até {snapshot['generated_at']}<br>
+     <b>Linha:</b> {snapshot['line_name']} &nbsp; | &nbsp; <b>Equipamento:</b> {snapshot['equipment_id']}<br>
+     <b>Modelo:</b> {snapshot['model_name']} &nbsp; | &nbsp; <b>OP:</b> {snapshot['production_order']}</p>
+  <table style="border-collapse:collapse;margin:8px 0;" border="1" cellpadding="6">
+    <tr><th>Total</th><th>OK</th><th>NG</th><th>Yield</th></tr>
+    <tr><td>{snapshot['total']}</td><td>{snapshot['ok']}</td><td>{snapshot['ng']}</td><td>{snapshot['yield_pct']:.2f}%</td></tr>
+  </table>
+  <p><b>Falhas:</b><br>
+     Faltando ESQ: {audit['faltando_esq']}<br>
+     Faltando DIR: {audit['faltando_dir']}<br>
+     Faltando BOTH: {audit['faltando_both']}<br>
+     Desalinhada ESQ: {audit['desalinhada_esq']}<br>
+     Desalinhada DIR: {audit['desalinhada_dir']}<br>
+     Desalinhada BOTH: {audit['desalinhada_both']}<br>
+     Casos mistos: {audit['misto']}<br>
+     OK com atenção: {audit['ok_atencao']}</p>
+  <p>Relatório completo em PDF anexo.</p>
+</body></html>"""
+
+
+def generate_audit_report_files() -> tuple[Path, Path]:
+    snapshot = report_summary_snapshot()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    charts = _save_report_charts(snapshot, stamp)
+
+    html_content = _build_report_html(snapshot)
+    html_path = REPORTS_DIR / f"audit_report_{stamp}.html"
+    html_path.write_text(html_content, encoding='utf-8')
+
+    pdf_path = REPORTS_DIR / f"audit_report_{stamp}.pdf"
+
+    if not HAS_MPL:
+        raise RuntimeError("matplotlib não está disponível para gerar o PDF do relatório.")
+
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    import textwrap
+
+    audit = snapshot['audit']
+
+    with PdfPages(pdf_path) as pdf:
+        fig = plt.figure(figsize=(8.27, 11.69))
+        fig.patch.set_facecolor('white')
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.axis('off')
+
+        y = 0.965
+        def line(txt, size=10, weight='normal', color='#111827', step=0.026):
+            nonlocal y
+            fig.text(0.07, y, txt, fontsize=size, fontweight=weight, color=color, va='top', ha='left')
+            y -= step
+
+        line('SVC Inspeção de Molas — DUAL', size=18, weight='bold', step=0.035)
+        line('Relatório de Auditoria', size=14, weight='bold', step=0.032)
+        line(f"Emitido em: {snapshot['generated_at']}", size=10)
+        line(f"Período: {snapshot['period_start']} até {snapshot['generated_at']}", size=10)
+        line(f"Linha: {snapshot['line_name']}    Equipamento: {snapshot['equipment_id']}", size=10)
+        line(f"Modelo: {snapshot['model_name']}    OP: {snapshot['production_order']}", size=10)
+        line(f"Último Inspection ID: {snapshot['inspection_id']}", size=10, step=0.034)
+
+        line('Resumo da produção', size=12, weight='bold', step=0.03)
+        line(f"Total produzido: {snapshot['total']}", size=10)
+        line(f"Total OK: {snapshot['ok']}", size=10)
+        line(f"Total NG: {snapshot['ng']}", size=10)
+        line(f"Yield: {snapshot['yield_pct']:.2f}%", size=10, step=0.034)
+
+        line('Detalhamento das falhas', size=12, weight='bold', step=0.03)
+        details = [
+            f"Faltando ESQ: {audit['faltando_esq']}",
+            f"Faltando DIR: {audit['faltando_dir']}",
+            f"Faltando BOTH: {audit['faltando_both']}",
+            f"Desalinhada ESQ: {audit['desalinhada_esq']}",
+            f"Desalinhada DIR: {audit['desalinhada_dir']}",
+            f"Desalinhada BOTH: {audit['desalinhada_both']}",
+            f"Casos mistos: {audit['misto']}",
+            f"OK com atenção: {audit['ok_atencao']}",
+        ]
+        for item in details:
+            line(item, size=10)
+
+        y -= 0.01
+        wrapped = textwrap.fill(
+            'Relatório gerado automaticamente pelo sistema com base nos dados disponíveis até o momento da emissão.',
+            width=95
+        )
+        fig.text(0.07, max(y, 0.06), wrapped, fontsize=9, color='#4b5563', va='top', ha='left')
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+
+        for cp in charts:
+            if cp.exists():
+                img = plt.imread(str(cp))
+                fig = plt.figure(figsize=(8.27, 11.69))
+                fig.patch.set_facecolor('white')
+                ax = fig.add_axes([0.06, 0.08, 0.88, 0.84])
+                ax.imshow(img)
+                ax.axis('off')
+                fig.text(0.07, 0.96, 'SVC Inspeção de Molas — DUAL', fontsize=16, fontweight='bold', va='top')
+                fig.text(0.07, 0.93, 'Relatório de Auditoria — Gráfico', fontsize=12, va='top')
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+
+    st.session_state['last_report_pdf'] = str(pdf_path)
+    st.session_state['last_report_html'] = str(html_path)
+    st.session_state['last_report_generated_at'] = snapshot['generated_at']
+    return pdf_path, html_path
 
 # ==========================================================
 # ==========================================================
@@ -2133,24 +2570,27 @@ with st.sidebar:
 
     st.markdown("---")
 
+    
     with st.expander("ℹ️ Sobre o Sistema", expanded=False):
-        st.markdown("### Inspeção de Molas — DUAL")
-        st.markdown(f"- **Versão:** {APP_VERSION}")
-        st.markdown(f"- **Status:** {APP_STAGE}")
-        st.markdown(f"- **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        st.markdown("### Sistema: SVC – Computer Vision System for Spring Inspection")
+        st.markdown("- **Versão:** v1.0.0")
+        st.markdown("- **Status:** Stable")
+        st.markdown("- **Release:** 28/03/2026")
         st.markdown("- **Empresa:** Salcomp")
         st.markdown("- **Engenheiro Responsável:** André Gama de Matos")
         st.markdown("- **Orientador Acadêmico:** Prof. Dr. Carlos Maurício Seródio Figueiredo")
         st.markdown("- **Programa de Pós-Graduação:** Mestrado em Engenharia Elétrica")
         st.markdown("- **Ênfase:** Sistemas Embarcados e Visão Computacional")
-        st.markdown("- **Local:** Universidade do Estado do Amazonas - UEA")
-        st.markdown("- **Unidade:** Escola Superior de Tecnologia - EST")
+        st.markdown("- **Instituição:** Universidade do Estado do Amazonas – UEA")
+        st.markdown("- **Unidade:** Escola Superior de Tecnologia – EST")
+        st.markdown("**Desenvolvido nos Laboratórios de Sistemas Embarcados e Visão Computacional da Escola Superior de Tecnologia – UEA**")
         st.markdown("---")
         st.markdown("**Ambiente de Execução do Sistema**")
         st.markdown(f"- **Sistema Operacional:** {platform.system()} {platform.release()}")
         st.markdown(f"- **Python:** {platform.python_version()}")
         st.markdown(f"- **OpenCV:** {cv2.__version__}")
         st.markdown(f"- **TensorFlow:** {tf.__version__}")
+
 
     with st.expander("🛠 Debug Serial", expanded=False):
             st.caption("Painel de diagnóstico da comunicação Serial e gatilho do sensor.")
@@ -2391,6 +2831,100 @@ if selected_key != st.session_state.get("selected_model_key"):
 
 st.session_state["product_model"] = st.session_state.get("selected_model_key", "MODELO_PADRAO")
 
+if is_eng:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📧 Configuração de E-mails")
+    st.sidebar.checkbox(
+        "Habilitar relatórios por e-mail",
+        key="email_reports_enabled",
+        help="Ativa o cadastro e o uso futuro do envio automático/manual de relatórios por e-mail."
+    )
+    st.sidebar.checkbox(
+        "Enviar também ao gerar relatório",
+        key="email_send_on_generate",
+        help="Quando o envio real estiver habilitado, permite disparar e-mail logo após gerar o relatório."
+    )
+    st.sidebar.checkbox(
+        "Habilitar envio diário automático",
+        key="email_auto_daily_enabled",
+        help="Define a intenção de envio diário automático no horário configurado."
+    )
+    st.sidebar.text_input(
+        "Horário do envio diário",
+        key="email_daily_time",
+        placeholder="17:30",
+        help="Formato HH:MM. Ex.: 17:30"
+    )
+    st.sidebar.text_input(
+        "Para",
+        key="email_to",
+        placeholder="qualidade@empresa.com; gerente@empresa.com",
+        help="Separe múltiplos e-mails por ponto e vírgula."
+    )
+    st.sidebar.text_input(
+        "CC",
+        key="email_cc",
+        placeholder="engenharia@empresa.com",
+        help="Opcional. Separe múltiplos e-mails por ponto e vírgula."
+    )
+    st.sidebar.text_input(
+        "BCC",
+        key="email_bcc",
+        placeholder="",
+        help="Opcional. Separe múltiplos e-mails por ponto e vírgula."
+    )
+    st.sidebar.text_input(
+        "Prefixo do assunto",
+        key="email_subject_prefix",
+        help="Ex.: [SVC] Relatório de Auditoria"
+    )
+    st.sidebar.text_input(
+        "Nome do remetente",
+        key="email_sender_name",
+        help="Nome exibido no e-mail. Ex.: SVC Inspeção de Molas"
+    )
+    st.sidebar.text_input(
+        "SMTP server",
+        key="smtp_server",
+        help="Ex.: smtp.office365.com"
+    )
+    st.sidebar.number_input(
+        "SMTP port",
+        min_value=1,
+        max_value=65535,
+        step=1,
+        key="smtp_port"
+    )
+    st.sidebar.text_input(
+        "SMTP user",
+        key="smtp_user",
+        help="Conta de envio. A senha/token deve ficar fora do código, em arquivo local protegido ou variável de ambiente."
+    )
+    st.sidebar.checkbox(
+        "Usar TLS",
+        key="smtp_use_tls"
+    )
+
+    c_mail1, c_mail2 = st.sidebar.columns(2)
+    with c_mail1:
+        if st.button("💾 Salvar e-mail", key="btn_save_email_cfg", use_container_width=True):
+            try:
+                save_email_config(collect_email_config_from_session())
+                st.sidebar.success("Configuração de e-mail salva ✅")
+            except Exception as e:
+                st.sidebar.error(f"Falha ao salvar config de e-mail: {e}")
+    with c_mail2:
+        if st.button("🔄 Recarregar", key="btn_reload_email_cfg", use_container_width=True):
+            try:
+                apply_email_config_to_session(load_email_config())
+                st.sidebar.success("Configuração recarregada ✅")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Falha ao recarregar config de e-mail: {e}")
+
+    st.sidebar.caption(email_status_summary())
+    st.sidebar.caption("Obs.: nesta etapa foram adicionados os campos de cadastro/configuração. O disparo SMTP real pode ser ligado na próxima rodada sem perder os recursos já existentes.")
+
 # ==========================================================
 # PRELOAD DO MODELO (NÃO mexe em câmera; evita sensor inferir sem modelo)
 # ==========================================================
@@ -2403,12 +2937,10 @@ if st.session_state.get("serial_on", False):
         # não trava UI — só registra
         st.session_state["last_error"] = f"Falha ao carregar modelo (pré-load): {e}"
 
-st.sidebar.selectbox(
-    "Turno",
-    options=[1, 2, 3],
-    index=[1, 2, 3].index(int(st.session_state.get("shift", 1)))
-          if int(st.session_state.get("shift", 1)) in [1, 2, 3] else 0,
-    key="shift"
+st.sidebar.text_input(
+    "Linha",
+    value=str(st.session_state.get("line_name", "L01")),
+    key="line_name"
 )
 
 now_str = datetime.now().strftime("%d/%m/%y %H:%M:%S")
@@ -2438,6 +2970,15 @@ if st.sidebar.button("🔄 Reset Produção", use_container_width=True):
     st.session_state["cnt_ng_esq"] = 0
     st.session_state["cnt_ng_dir"] = 0
     st.session_state["history"] = []
+    st.session_state["cnt_missing_esq"] = 0
+    st.session_state["cnt_missing_dir"] = 0
+    st.session_state["cnt_missing_both"] = 0
+    st.session_state["cnt_misaligned_esq"] = 0
+    st.session_state["cnt_misaligned_dir"] = 0
+    st.session_state["cnt_misaligned_both"] = 0
+    st.session_state["cnt_misto"] = 0
+    st.session_state["cnt_ok_attention"] = 0
+    st.session_state["production_started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     st.session_state["last_warning"] = "Contadores de produção resetados."
     st.rerun()
 
@@ -2586,79 +3127,91 @@ if is_eng:
                 st.error(f"Falha ao gerar split: {e}")
 
 # ==========================================================
-# SIDEBAR — EVIDÊNCIAS / RETENÇÃO
+# SIDEBAR — EVIDÊNCIAS / RETENÇÃO (ENG)
 # ==========================================================
-st.sidebar.divider()
-st.sidebar.header("📸 Evidências / Auditoria")
+if is_eng:
+    st.sidebar.divider()
+    st.sidebar.header("📸 Evidências / Auditoria")
 
-st.session_state["evidence_auto_enabled"] = st.sidebar.checkbox(
-    "Ativar SALVAR ERROS AUTOMATICAMENTE",
-    value=bool(st.session_state.get("evidence_auto_enabled", True)),
-    help="Salva automaticamente NG_DESALINHADO, NG_FALTANDO e, opcionalmente, OK próximo do limite."
-)
+    st.session_state["evidence_auto_enabled"] = st.sidebar.checkbox(
+        "Ativar SALVAR ERROS AUTOMATICAMENTE",
+        value=bool(st.session_state.get("evidence_auto_enabled", True)),
+        help="Salva automaticamente NG_DESALINHADO, NG_FALTANDO e, opcionalmente, OK próximo do limite."
+    )
 
-st.session_state["evidence_save_ok_limit"] = st.sidebar.checkbox(
-    "Salvar também OK próximo do limite",
-    value=bool(st.session_state.get("evidence_save_ok_limit", True)),
-    help="Guarda evidências quando a peça foi aprovada, mas ficou na banda de atenção."
-)
+    st.session_state["evidence_save_ok_limit"] = st.sidebar.checkbox(
+        "Salvar também OK próximo do limite",
+        value=bool(st.session_state.get("evidence_save_ok_limit", True)),
+        help="Guarda evidências quando a peça foi aprovada, mas ficou na banda de atenção."
+    )
 
-st.session_state["evidence_retention_enabled"] = st.sidebar.checkbox(
-    "Ativar auto delete por retenção",
-    value=bool(st.session_state.get("evidence_retention_enabled", True)),
-    help="Remove arquivos antigos automaticamente para evitar crescimento excessivo em disco."
-)
+    st.session_state["evidence_retention_enabled"] = st.sidebar.checkbox(
+        "Ativar auto delete por retenção",
+        value=bool(st.session_state.get("evidence_retention_enabled", True)),
+        help="Remove arquivos antigos automaticamente para evitar crescimento excessivo em disco."
+    )
 
-st.session_state["evidence_retention_days"] = st.sidebar.selectbox(
-    "Auto delete após",
-    options=[30, 60, 90],
-    index=[30, 60, 90].index(int(st.session_state.get("evidence_retention_days", 60))),
-)
+    st.session_state["evidence_retention_days"] = st.sidebar.selectbox(
+        "Auto delete após",
+        options=[30, 60, 90],
+        index=[30, 60, 90].index(int(st.session_state.get("evidence_retention_days", 60))),
+    )
 
-st.session_state["evidence_warning_gb"] = st.sidebar.number_input(
-    "Avisar quando pasta automática exceder (GB)",
-    min_value=0.5, max_value=100.0,
-    value=float(st.session_state.get("evidence_warning_gb", 5.0)),
-    step=0.5,
-)
+    st.session_state["evidence_warning_gb"] = st.sidebar.number_input(
+        "Avisar quando pasta automática exceder (GB)",
+        min_value=0.5, max_value=100.0,
+        value=float(st.session_state.get("evidence_warning_gb", 5.0)),
+        step=0.5,
+    )
 
-_deleted_files, _deleted_bytes = maybe_cleanup_auto_evidence(
-    AUTO_EVIDENCE_DIR,
-    retention_days=int(st.session_state.get("evidence_retention_days", 60)),
-    enabled=bool(st.session_state.get("evidence_retention_enabled", True)),
-    interval_sec=1800,
-)
+    _deleted_files, _deleted_bytes = maybe_cleanup_auto_evidence(
+        AUTO_EVIDENCE_DIR,
+        retention_days=int(st.session_state.get("evidence_retention_days", 60)),
+        enabled=bool(st.session_state.get("evidence_retention_enabled", True)),
+        interval_sec=1800,
+    )
 
-auto_folder_bytes = folder_size_bytes(AUTO_EVIDENCE_DIR)
-auto_folder_files = count_evidence_files(AUTO_EVIDENCE_DIR)
-st.sidebar.caption(f"Pasta automática: `{AUTO_EVIDENCE_DIR}`")
-st.sidebar.caption(f"Tamanho atual: **{bytes_to_human(auto_folder_bytes)}**")
-st.sidebar.caption(f"Arquivos atuais: **{auto_folder_files}**")
+    auto_folder_bytes = folder_size_bytes(AUTO_EVIDENCE_DIR)
+    auto_folder_files = count_evidence_files(AUTO_EVIDENCE_DIR)
+    disk_info = get_disk_status(BASE_DIR)
+    disk_status, disk_label = disk_free_status_label(disk_info.get("free_gb", 0.0), warn_gb=10.0, critical_gb=5.0)
 
-if auto_folder_bytes >= float(st.session_state.get("evidence_warning_gb", 5.0)) * 1024 * 1024 * 1024:
-    st.sidebar.warning("Uso de disco acima do limite configurado.")
-else:
-    st.sidebar.success("Uso de disco dentro do limite configurado.")
+    st.sidebar.caption(f"Pasta automática: `{AUTO_EVIDENCE_DIR}`")
+    st.sidebar.caption(f"Tamanho atual: **{bytes_to_human(auto_folder_bytes)}**")
+    st.sidebar.caption(f"Arquivos atuais: **{auto_folder_files}**")
+    st.sidebar.caption(f"Espaço livre em disco: **{disk_info.get('free_gb', 0.0):.2f} GB**")
 
-if bool(st.session_state.get("evidence_retention_enabled", True)):
-    st.sidebar.info(f"Retenção ativa: {int(st.session_state.get('evidence_retention_days', 60))} dias.")
-else:
-    st.sidebar.info("Retenção automática desativada.")
+    if auto_folder_bytes >= float(st.session_state.get("evidence_warning_gb", 5.0)) * 1024 * 1024 * 1024:
+        st.sidebar.warning("Pasta automática acima do limite configurado.")
+    else:
+        st.sidebar.success("Pasta automática dentro do limite configurado.")
 
-if _deleted_files > 0:
-    st.sidebar.success(f"Limpeza automática: {_deleted_files} arquivo(s) removido(s), liberando {bytes_to_human(_deleted_bytes)}.")
+    if disk_status == "critical":
+        st.sidebar.error(f"Disco em estado {disk_label}. Libere espaço para evitar travamentos.")
+    elif disk_status == "warning":
+        st.sidebar.warning(f"Disco em estado {disk_label}. Recomenda-se acompanhar o armazenamento.")
+    else:
+        st.sidebar.success(f"Disco em estado {disk_label}.")
 
-if st.sidebar.button("🧹 Executar limpeza agora", use_container_width=True):
-    df, db = cleanup_old_evidence(AUTO_EVIDENCE_DIR, int(st.session_state.get("evidence_retention_days", 60)))
-    st.session_state["evidence_last_cleanup_files"] = df
-    st.session_state["evidence_last_cleanup_bytes"] = db
-    st.sidebar.success(f"Limpeza manual concluída: {df} arquivo(s), {bytes_to_human(db)} liberados.")
+    if bool(st.session_state.get("evidence_retention_enabled", True)):
+        st.sidebar.info(f"Retenção ativa: {int(st.session_state.get('evidence_retention_days', 60))} dias.")
+    else:
+        st.sidebar.info("Retenção automática desativada.")
 
-_recent_auto = list_recent_files(AUTO_EVIDENCE_DIR, limit=5)
-if _recent_auto:
-    with st.sidebar.expander("🕘 Últimos arquivos automáticos", expanded=False):
-        for _p in _recent_auto:
-            st.caption(_p.name)
+    if _deleted_files > 0:
+        st.sidebar.success(f"Limpeza automática: {_deleted_files} arquivo(s) removido(s), liberando {bytes_to_human(_deleted_bytes)}.")
+
+    if st.sidebar.button("🧹 Executar limpeza agora", use_container_width=True):
+        df, db = cleanup_old_evidence(AUTO_EVIDENCE_DIR, int(st.session_state.get("evidence_retention_days", 60)))
+        st.session_state["evidence_last_cleanup_files"] = df
+        st.session_state["evidence_last_cleanup_bytes"] = db
+        st.sidebar.success(f"Limpeza manual concluída: {df} arquivo(s), {bytes_to_human(db)} liberados.")
+
+    _recent_auto = list_recent_files(AUTO_EVIDENCE_DIR, limit=5)
+    if _recent_auto:
+        with st.sidebar.expander("🕘 Últimos arquivos automáticos", expanded=False):
+            for _p in _recent_auto:
+                st.caption(_p.name)
 
 # ==========================================================
 # SIDEBAR — CONFIG (apenas ENG liberado)
@@ -2775,7 +3328,7 @@ def decide_misaligned_status(prob_ng: float, prob_ok: float, thr_ng_ok: float, t
     thr_ng_ng = float(thr_ng_ng)
     margin = float(prob_ok - prob_ng)
 
-    strong_ok = (prob_ng <= thr_ng_ok) and (margin >= float(margin_abs))
+    strong_ok = (prob_ng <= thr_ng_ok)
     strong_ng = (prob_ng >= thr_ng_ng) and (margin <= -float(margin_abs))
 
     if strong_ng:
@@ -3004,12 +3557,32 @@ def update_metrics_and_history(res: dict) -> None:
     aprovado = bool(res.get("aprovado", False))
     if aprovado:
         st.session_state["cnt_ok"] = int(st.session_state.get("cnt_ok", 0)) + 1
+        if bool(res.get("attention_flag", False)):
+            st.session_state["cnt_ok_attention"] = int(st.session_state.get("cnt_ok_attention", 0)) + 1
     else:
         st.session_state["cnt_ng"] = int(st.session_state.get("cnt_ng", 0)) + 1
         if not bool(res.get("ok_esq", True)):
             st.session_state["cnt_ng_esq"] = int(st.session_state.get("cnt_ng_esq", 0)) + 1
         if not bool(res.get("ok_dir", True)):
             st.session_state["cnt_ng_dir"] = int(st.session_state.get("cnt_ng_dir", 0)) + 1
+
+        defect_esq = str(res.get("defect_esq", "OK") or "OK").strip().upper()
+        defect_dir = str(res.get("defect_dir", "OK") or "OK").strip().upper()
+
+        if defect_esq == "NG_MISSING" and defect_dir == "OK":
+            st.session_state["cnt_missing_esq"] = int(st.session_state.get("cnt_missing_esq", 0)) + 1
+        elif defect_esq == "OK" and defect_dir == "NG_MISSING":
+            st.session_state["cnt_missing_dir"] = int(st.session_state.get("cnt_missing_dir", 0)) + 1
+        elif defect_esq == "NG_MISSING" and defect_dir == "NG_MISSING":
+            st.session_state["cnt_missing_both"] = int(st.session_state.get("cnt_missing_both", 0)) + 1
+        elif defect_esq == "NG_MISALIGNED" and defect_dir == "OK":
+            st.session_state["cnt_misaligned_esq"] = int(st.session_state.get("cnt_misaligned_esq", 0)) + 1
+        elif defect_esq == "OK" and defect_dir == "NG_MISALIGNED":
+            st.session_state["cnt_misaligned_dir"] = int(st.session_state.get("cnt_misaligned_dir", 0)) + 1
+        elif defect_esq == "NG_MISALIGNED" and defect_dir == "NG_MISALIGNED":
+            st.session_state["cnt_misaligned_both"] = int(st.session_state.get("cnt_misaligned_both", 0)) + 1
+        else:
+            st.session_state["cnt_misto"] = int(st.session_state.get("cnt_misto", 0)) + 1
 
     hist = st.session_state.get("history", [])
     hist.append({
@@ -3021,6 +3594,7 @@ def update_metrics_and_history(res: dict) -> None:
         "p_dir": float(res.get("p_pres_dir", 0.0)),
         "ng_esq": int(not bool(res.get("ok_esq", True))),
         "ng_dir": int(not bool(res.get("ok_dir", True))),
+        "defect_detail": build_defect_detail_code(res),
     })
     st.session_state["history"] = hist
 
@@ -3197,7 +3771,7 @@ def run_capture_infer_dual(trigger_source: str = "button"):
         row = {
             "timestamp": timestamp,
             "modelo": st.session_state.get("product_model", ""),
-            "turno": st.session_state.get("shift", ""),
+            "linha": st.session_state.get("line_name", ""),
             "resultado_final": final_result,
             "defect_esq": result_left,
             "defect_dir": result_right,
@@ -3244,7 +3818,7 @@ def run_capture_infer_dual(trigger_source: str = "button"):
                     production_order=production_order,
                     serial_number=serial_number,
                     model_name=str(st.session_state.get("product_model", "")),
-                    shift=str(st.session_state.get("shift", "")),
+                    line_name=str(st.session_state.get("line_name", "")),
                     operation_mode=operation_mode,
                     result_left=result_left,
                     result_right=result_right,
@@ -3275,7 +3849,7 @@ def run_capture_infer_dual(trigger_source: str = "button"):
             "production_order": production_order,
             "serial_number": serial_number,
             "model_name": str(st.session_state.get("product_model", "")),
-            "shift": str(st.session_state.get("shift", "")),
+            "line": str(st.session_state.get("line_name", "")),
             "operation_mode": operation_mode,
             "source": trigger_source,
             "result_left": result_left,
@@ -3573,49 +4147,122 @@ with colB:
             # Resultado Industrial (visual profissional)
             render_resultado_industrial(res)
 
-            st.markdown("### 📸 Coleta Manual / Auditoria")
-            mc1, mc2, mc3 = st.columns(3)
-            with mc1:
-                if st.button("✅ Confirmar OK", use_container_width=True):
-                    try:
-                        saved = save_manual_current_result("OK")
-                        st.success(f"Salvo manualmente: {saved['raw_path'].name}")
-                    except Exception as e:
-                        st.error(f"Falha ao salvar OK: {e}")
-            with mc2:
-                if st.button("⚠️ Confirmar NG_DESALINHADO", use_container_width=True):
-                    try:
-                        saved = save_manual_current_result("NG_DESALINHADO")
-                        st.warning(f"Salvo manualmente: {saved['raw_path'].name}")
-                    except Exception as e:
-                        st.error(f"Falha ao salvar NG_DESALINHADO: {e}")
-            with mc3:
-                if st.button("❌ Confirmar NG_FALTANDO", use_container_width=True):
-                    try:
-                        saved = save_manual_current_result("NG_FALTANDO")
-                        st.error(f"Salvo manualmente: {saved['raw_path'].name}")
-                    except Exception as e:
-                        st.error(f"Falha ao salvar NG_FALTANDO: {e}")
+            if is_eng:
+                st.markdown("### 📸 Coleta Manual / Auditoria")
 
-            last_auto = st.session_state.get("evidence_last_saved")
-            last_manual = st.session_state.get("evidence_last_manual")
-            if last_auto:
-                st.info(f"Última evidência automática: **{last_auto['raw_path'].name}** — {last_auto['reason']}")
-            if last_manual:
-                st.info(f"Último salvamento manual: **{last_manual['raw_path'].name}**")
+                manual_counts = get_manual_detail_counts()
+                last_auto = st.session_state.get("evidence_last_saved")
+                last_manual = st.session_state.get("evidence_last_manual")
+                last_manual_detail = str(st.session_state.get("manual_last_saved_detail", "")).strip()
 
-            with st.expander("🗂 Monitor da pasta automática", expanded=False):
-                auto_bytes = folder_size_bytes(AUTO_EVIDENCE_DIR)
-                auto_files = count_evidence_files(AUTO_EVIDENCE_DIR)
-                st.write(f"**Pasta:** `{AUTO_EVIDENCE_DIR}`")
-                st.write(f"**Tamanho atual:** {bytes_to_human(auto_bytes)}")
-                st.write(f"**Arquivos atuais:** {auto_files}")
-                st.write(f"**Retenção:** {int(st.session_state.get('evidence_retention_days', 60))} dias" if bool(st.session_state.get('evidence_retention_enabled', True)) else "**Retenção:** desativada")
-                recent = list_recent_files(AUTO_EVIDENCE_DIR, limit=8)
-                if recent:
-                    st.caption("Últimos arquivos:")
-                    for p in recent:
-                        st.write(f"- {p.name}")
+                top1, top2 = st.columns([2.2, 1.2])
+                with top1:
+                    if st.button("✅ Confirmar OK (ambas perfeitas)", use_container_width=True):
+                        try:
+                            saved = save_manual_current_result(detail_override="OK")
+                            st.success(f"Salvo: {manual_detail_human('OK')}")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar OK: {e}")
+                with top2:
+                    st.metric("Contador OK", manual_counts["OK"])
+
+                st.markdown("**NG_DESALINHADO**")
+                d1, d2, d3 = st.columns(3)
+                with d1:
+                    if st.button("⚠️ ESQ desalinhado / DIR OK", key="btn_des_esq", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="DESALINHADA_ESQ")
+                            st.warning("Salvo: Desalinhado ESQ")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['DESALINHADA_ESQ']}")
+                with d2:
+                    if st.button("⚠️ ESQ OK / DIR desalinhado", key="btn_des_dir", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="DESALINHADA_DIR")
+                            st.warning("Salvo: Desalinhado DIR")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['DESALINHADA_DIR']}")
+                with d3:
+                    if st.button("⚠️ Ambos desalinhados", key="btn_des_both", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="DESALINHADA_BOTH")
+                            st.warning("Salvo: Desalinhado ambos")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    if manual_counts["DESALINHADA_BOTH"] > 0:
+                        st.info(f"Salvo: Desalinhado ambos")
+                    st.caption(f"Contador: {manual_counts['DESALINHADA_BOTH']}")
+
+                st.markdown("**NG_FALTANDO**")
+                f1, f2, f3 = st.columns(3)
+                with f1:
+                    if st.button("❌ ESQ faltando / DIR OK", key="btn_falt_esq", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="FALTANDO_ESQ")
+                            st.error("Salvo: Faltando ESQ")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['FALTANDO_ESQ']}")
+                with f2:
+                    if st.button("❌ ESQ OK / DIR faltando", key="btn_falt_dir", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="FALTANDO_DIR")
+                            st.error("Salvo: Faltando DIR")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['FALTANDO_DIR']}")
+                with f3:
+                    if st.button("❌ Ambas faltando", key="btn_falt_both", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="FALTANDO_BOTH")
+                            st.error("Salvo: Faltando ambos")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['FALTANDO_BOTH']}")
+
+                st.markdown("**Casos mistos (um defeito em cada lado)**")
+                m1, m2 = st.columns(2)
+                with m1:
+                    if st.button("🔀 ESQ desalinhado / DIR faltando", key="btn_misto_des_falt", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="MISTO_DESALINHADA_ESQ_FALTANDO_DIR")
+                            st.info("Salvo: ESQ desalinhado / DIR faltando")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['MISTO_DESALINHADA_ESQ_FALTANDO_DIR']}")
+                with m2:
+                    if st.button("🔀 ESQ faltando / DIR desalinhado", key="btn_misto_falt_des", use_container_width=True):
+                        try:
+                            save_manual_current_result(detail_override="MISTO_FALTANDO_ESQ_DESALINHADA_DIR")
+                            st.info("Salvo: ESQ faltando / DIR desalinhado")
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                    st.caption(f"Contador: {manual_counts['MISTO_FALTANDO_ESQ_DESALINHADA_DIR']}")
+
+                if last_auto:
+                    st.info(f"Última evidência automática: **{last_auto['raw_path'].name}** — {last_auto['reason']}")
+                if last_manual:
+                    detail_txt = manual_detail_human(last_manual_detail) if last_manual_detail else last_manual['label']
+                    st.info(f"Último salvamento manual: **{detail_txt}** — `{last_manual['raw_path'].name}`")
+
+                with st.expander("🗂 Monitor da pasta automática", expanded=False):
+                    auto_bytes = folder_size_bytes(AUTO_EVIDENCE_DIR)
+                    auto_files = count_evidence_files(AUTO_EVIDENCE_DIR)
+                    disk_info = get_disk_status(BASE_DIR)
+                    disk_status, disk_label = disk_free_status_label(disk_info.get("free_gb", 0.0), warn_gb=10.0, critical_gb=5.0)
+                    st.write(f"**Pasta:** `{AUTO_EVIDENCE_DIR}`")
+                    st.write(f"**Tamanho atual:** {bytes_to_human(auto_bytes)}")
+                    st.write(f"**Arquivos atuais:** {auto_files}")
+                    st.write(f"**Espaço livre em disco:** {disk_info.get('free_gb', 0.0):.2f} GB")
+                    st.write(f"**Status do disco:** {disk_label}")
+                    st.write(f"**Retenção:** {int(st.session_state.get('evidence_retention_days', 60))} dias" if bool(st.session_state.get('evidence_retention_enabled', True)) else "**Retenção:** desativada")
+                    recent = list_recent_files(AUTO_EVIDENCE_DIR, limit=8)
+                    if recent:
+                        st.caption("Últimos arquivos:")
+                        for p in recent:
+                            st.write(f"- {p.name}")
 
         if len(st.session_state.get("history", [])) > 1:
             with st.expander("📈 Qualidade (Gráficos)", expanded=False):
@@ -3633,6 +4280,62 @@ with colB:
                     "DIR": int(st.session_state.get("cnt_ng_dir", 0))
                 }
                 st.bar_chart(defects)
+
+        audit_counts = get_audit_counts_from_session()
+        with st.expander("🧾 Painel detalhado de auditoria", expanded=True):
+            a1, a2, a3 = st.columns(3)
+            with a1:
+                st.metric("Faltando ESQ", audit_counts["faltando_esq"])
+                st.metric("Faltando DIR", audit_counts["faltando_dir"])
+                st.metric("Faltando BOTH", audit_counts["faltando_both"])
+            with a2:
+                st.metric("Desalinhada ESQ", audit_counts["desalinhada_esq"])
+                st.metric("Desalinhada DIR", audit_counts["desalinhada_dir"])
+                st.metric("Desalinhada BOTH", audit_counts["desalinhada_both"])
+            with a3:
+                st.metric("Casos mistos", audit_counts["misto"])
+                st.metric("OK com atenção", audit_counts["ok_atencao"])
+                st.metric("NG total", int(st.session_state.get("cnt_ng", 0)))
+
+
+        st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+        btn_col, info_col = st.columns([1.1, 1.2])
+        with btn_col:
+            if st.button("📄 Gerar Relatório de Auditoria", key="btn_generate_audit_report", use_container_width=True):
+                try:
+                    pdf_path, html_path = generate_audit_report_files()
+                    st.success(f"Relatório gerado com sucesso: {pdf_path.name}")
+                except Exception as e:
+                    st.error(f"Falha ao gerar relatório: {e}")
+        with info_col:
+            if st.session_state.get("last_report_generated_at"):
+                st.caption(f"Último relatório: {st.session_state.get('last_report_generated_at')}")
+
+        last_pdf = st.session_state.get("last_report_pdf", "")
+        last_html = st.session_state.get("last_report_html", "")
+        if last_pdf and Path(last_pdf).exists():
+            d1, d2 = st.columns(2)
+            with d1:
+                with open(last_pdf, "rb") as fpdf:
+                    st.download_button(
+                        "⬇️ Baixar PDF do relatório",
+                        data=fpdf.read(),
+                        file_name=Path(last_pdf).name,
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key="download_pdf_report",
+                    )
+            if last_html and Path(last_html).exists():
+                with d2:
+                    with open(last_html, "rb") as fhtml:
+                        st.download_button(
+                            "⬇️ Baixar HTML resumo",
+                            data=fhtml.read(),
+                            file_name=Path(last_html).name,
+                            mime="text/html",
+                            use_container_width=True,
+                            key="download_html_report",
+                        )
 
     except Exception as e:
         st.error(f"Erro ao renderizar painel direito: {e}")

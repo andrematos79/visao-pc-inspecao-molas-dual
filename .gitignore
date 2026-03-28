@@ -16,8 +16,8 @@ dataset_products/
 logs/
 experiments/
 
-# Modelos pesados
-models/
+# Relatórios gerados
+reports/
 
 # Pastas locais
 Disco Local/
@@ -25,3 +25,9 @@ Disco Local/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Modelos gigantes de treino
+*.h5
+*.ckpt
+*.pb
+*.onnx

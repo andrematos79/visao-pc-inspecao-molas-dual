@@ -1,0 +1,16 @@
+{
+  "email_reports_enabled": true,
+  "email_send_on_generate": true,
+  "email_auto_daily_enabled": true,
+  "email_daily_time": "",
+  "email_to": "andrematos79@gmail.com",
+  "email_cc": "",
+  "email_bcc": "",
+  "email_subject_prefix": "Teste",
+  "email_sender_name": "Teste SVC",
+  "smtp_server": "smtp.gmail.com",
+  "smtp_port": 587,
+  "smtp_user": "andrematos79@gmail.com",
+  "smtp_password": "30",
+  "smtp_use_tls": true
+}

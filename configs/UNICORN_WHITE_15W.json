@@ -1,7 +1,7 @@
 {
   "threshold_presente": 0.71,
-  "threshold_ng_ok": 0.3,
-  "threshold_ng_ng": 0.4,
+  "threshold_ng_ok": 0.6,
+  "threshold_ng_ng": 0.75,
   "normalize_lab_equalize": true,
   "roi": {
     "ESQ": {
