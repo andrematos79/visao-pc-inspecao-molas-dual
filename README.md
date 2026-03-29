@@ -1,168 +1,55 @@
 
-# SVC — Computer Vision System for Spring Inspection
+# SVC — Computer Vision System for Automated Spring Inspection
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19207171.svg)](https://doi.org/10.5281/zenodo.19207171)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19323586.svg)](https://doi.org/10.5281/zenodo.19323586)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Release](https://img.shields.io/badge/version-v1.0.0--industrial-orange)
+![Release](https://img.shields.io/badge/version-v1.0.1--industrial-blue)
 
-Latest version DOI: https://doi.org/10.5281/zenodo.19207171
-Concept DOI (all versions): https://doi.org/10.5281/zenodo.19207170
+**Latest version DOI:** https://doi.org/10.5281/zenodo.19323586  
+**Concept DOI (all versions):** https://doi.org/10.5281/zenodo.19207170
 
-Industrial computer vision system for automated inspection of springs in
-mobile phone chargers.
-
-This repository contains the validated industrial version of the **SVC
-(Spring Vision Control)** system used for automated quality inspection
-in production environments.
-
------------------------------------------------------------------------
+---
 
 # Overview
 
-This project presents a **low‑cost computer vision system for automated
-inspection of metallic springs installed inside mobile phone chargers**.
+**SVC (Spring Vision Control)** is a low‑cost industrial computer vision system designed for **automated inspection of metallic springs installed inside mobile phone chargers**.
 
-The system combines:
+The system uses **deep learning, industrial triggering mechanisms, and a dual‑ROI inspection strategy** to detect:
 
-- USB camera image acquisition
-- Convolutional Neural Networks (MobileNetV2)
-- Dual‑ROI industrial decision logic
-- Real‑time operator interface
-- Industrial traceability logging
-- Automated evidence storage for auditing
-- Automated reporting and email notifications
+• Missing springs  
+• Misaligned springs  
+• Correct assembly conditions  
 
-The objective is to automatically detect **spring presence and alignment
-defects** inside the charger housing.
+The system evolved from a **laboratory prototype to an industrial‑ready solution (v1.0.1)** validated in a real manufacturing environment.
 
-The solution was developed within the **Professional Master's Program in
-Electrical Engineering — Embedded Systems and Computer Vision** at the
-**Universidade do Estado do Amazonas (UEA)**.
+This work was developed within the **Professional Master's Program in Electrical Engineering (PPGEEL)** at the **Universidade do Estado do Amazonas (UEA)**, focusing on **Embedded Systems and Computer Vision for Smart Manufacturing applications**.
 
-Developed at the **Embedded Systems and Computer Vision Laboratories**
-of the **School of Technology (EST)**.
-
------------------------------------------------------------------------
+---
 
 # Key Features
 
-✔ Low‑cost industrial computer vision system  
-✔ CNN‑based inspection using MobileNetV2  
-✔ Dual‑ROI inspection strategy  
+✔ Low‑cost industrial computer vision architecture  
+✔ CNN‑based inspection using **MobileNetV2**  
+✔ Dual‑ROI inspection strategy for left/right spring regions  
 ✔ CPU‑only inference (no GPU required)  
-✔ Automatic triggering via proximity sensor  
-✔ Industrial operator interface using Streamlit  
+✔ Automatic inspection triggering via proximity sensor  
+✔ Industrial operator interface built with **Streamlit**  
 
 ### Advanced Industrial Features
 
-✔ Automatic dataset collection for retraining  
+✔ Automatic dataset collection for AI retraining  
 ✔ Automatic saving of NG (defective) evidence images  
-✔ Disk usage monitoring for evidence storage folder  
-✔ Automatic retention policies for stored images (30 / 60 / 90 days)  
-✔ Integrated audit inspection panel on the interface  
-✔ Automatic generation of inspection reports (immediate, shift and daily)  
-✔ Email delivery of inspection reports to engineering or management  
+✔ Disk usage monitoring for evidence storage folders  
+✔ Automatic evidence retention policies (30 / 60 / 90 days)  
+✔ Integrated audit inspection panel  
+✔ Detailed engineering defect analysis panel  
+✔ Automatic inspection report generation (immediate / shift / daily)  
+✔ Email delivery of inspection reports  
+✔ Persistent storage of email configuration settings  
+✔ Laboratory inspection mode via **image upload**
 
------------------------------------------------------------------------
-
-# Automated Dataset Collection
-
-The system includes an integrated **dataset collection module** that
-allows automatic capture of inspection images during production.
-
-This feature enables:
-
-- Continuous dataset expansion
-- Collection of real production samples
-- Faster retraining of AI models
-- Improved defect detection accuracy
-
-Images are automatically organized into dataset folders for future
-machine learning training.
-
------------------------------------------------------------------------
-
-# Evidence Management System
-
-When a defect is detected, the system automatically saves an **NG
-evidence image**.
-
-These images support:
-
-- Production quality auditing
-- Failure investigation
-- Dataset expansion
-- Process improvement
-
-The system also includes automated **storage management**:
-
-- Disk space monitoring
-- Automatic storage alerts
-- Configurable image retention policies
-
-Retention policies supported:
-
-- 30 days
-- 60 days
-- 90 days
-
-Older images are automatically removed according to the configured
-policy.
-
------------------------------------------------------------------------
-
-# Audit Interface
-
-The SVC system includes a built‑in **audit visualization panel**
-accessible directly from the operator interface.
-
-The audit panel allows engineers and auditors to visualize:
-
-- Inspection results
-- Detected defect type
-- ROI classification results
-- Confidence scores
-- Inspection timestamps
-- Production statistics
-
-This eliminates the need to manually open image folders during audits.
-
------------------------------------------------------------------------
-
-# Automated Reporting System
-
-The system can automatically generate inspection reports.
-
-Supported report types:
-
-- Immediate inspection reports
-- Shift reports
-- Daily production reports
-
-Reports include:
-
-- Inspection statistics
-- Defect distribution
-- Production yield
-- Traceability information
-
-Reports are automatically stored for future auditing.
-
------------------------------------------------------------------------
-
-# Email Notification System
-
-Inspection reports can be automatically sent via email to:
-
-- Quality engineers
-- Production managers
-- Process engineers
-- Industrial auditors
-
-This allows **remote monitoring of production quality indicators**.
-
------------------------------------------------------------------------
+---
 
 # System Architecture
 
@@ -170,33 +57,32 @@ Operational pipeline:
 
 Sensor Trigger  
 ↓  
-Image Acquisition  
+Image Acquisition (USB Industrial Camera)  
 ↓  
-ROI Extraction (Left / Right spring regions)  
+ROI Extraction (Left / Right Spring Regions)  
 ↓  
 CNN Classification (MobileNetV2)  
 ↓  
-Dual Decision Logic  
+Dual Industrial Decision Logic  
 ↓  
 Operator Interface + Production Logging  
 ↓  
 Evidence Storage + Reporting + Email Notification
 
-The system also supports **automatic triggering using a proximity sensor
-connected to an Arduino Uno**.
+The system supports **automatic triggering using a proximity sensor connected to an Arduino Uno microcontroller**.
 
------------------------------------------------------------------------
+---
 
 # Hardware Components
 
-Computer: Industrial PC (Windows 10 / 11)  
-CPU: Intel Core i3 12th Gen or higher  
-RAM: 8 GB or more  
-Camera: Industrial USB camera  
-Microcontroller: Arduino Uno  
-Sensor: E18‑D80NK proximity sensor
+Industrial PC (Windows 10 / 11)  
+Intel Core i3 12th Gen or higher  
+8 GB RAM minimum  
+Industrial USB camera  
+Arduino Uno microcontroller  
+E18‑D80NK proximity sensor
 
------------------------------------------------------------------------
+---
 
 # Software Stack
 
@@ -208,7 +94,7 @@ PySerial
 Pandas  
 Matplotlib  
 
------------------------------------------------------------------------
+---
 
 # Artificial Intelligence Model
 
@@ -220,9 +106,9 @@ OK — Spring correctly installed
 NG_MISSING — Spring absent  
 NG_MISALIGNED — Spring present but misaligned
 
-Each spring position is evaluated independently.
+Each spring location is analyzed independently.
 
------------------------------------------------------------------------
+---
 
 # Dual Decision Logic
 
@@ -232,15 +118,112 @@ ROI Left = OK
 AND  
 ROI Right = OK
 
-If any side presents a defect, the product is rejected.
+If any ROI detects a defect, the product is automatically rejected.
 
------------------------------------------------------------------------
+This strategy improves **industrial robustness and reduces false approvals**.
+
+---
+
+# Dataset Collection System
+
+The SVC includes a built‑in **dataset generation tool** allowing engineers to capture inspection images directly from production.
+
+Benefits:
+
+• Continuous dataset expansion  
+• Faster AI retraining cycles  
+• Real industrial defect collection  
+• Improved model robustness
+
+Images are automatically organized into structured dataset folders.
+
+---
+
+# Evidence Management System
+
+When a defect is detected, the system automatically stores an **NG evidence image**.
+
+These images support:
+
+• Quality audits  
+• Failure investigations  
+• Dataset expansion  
+• Manufacturing process improvements
+
+Storage management features include:
+
+• Disk space monitoring  
+• Automatic alerts  
+• Configurable retention policies
+
+Retention options:
+
+30 days  
+60 days  
+90 days
+
+Older evidence images are automatically removed.
+
+---
+
+# Audit Interface
+
+The system provides a built‑in **audit visualization panel** integrated into the operator interface.
+
+Engineers and auditors can inspect:
+
+• Inspection results  
+• Detected defect type  
+• ROI classification outputs  
+• Confidence scores  
+• Inspection timestamps  
+• Production statistics
+
+This eliminates the need to manually browse evidence folders during industrial audits.
+
+---
+
+# Automated Reporting
+
+The SVC system automatically generates inspection reports.
+
+Supported report types:
+
+Immediate inspection reports  
+Shift reports  
+Daily production reports
+
+Reports include:
+
+• Production yield  
+• Defect distribution  
+• Inspection statistics  
+• Traceability data
+
+Reports are automatically archived for auditing.
+
+---
+
+# Email Notification System
+
+Inspection reports can be automatically delivered via email to:
+
+Quality engineers  
+Production managers  
+Process engineers  
+Industrial auditors
+
+Email configuration is **persistently stored**, ensuring system continuity after shutdown or restart.
+
+This enables **remote monitoring of production quality indicators**.
+
+---
 
 # Industrial Validation
 
-Dataset: ~1170 real images collected from production environment.
+Dataset size: ~1170 production images.
 
-Validation experiment:
+Experimental validation:
 
 OK — 50 units  
 NG_MISALIGNED — 30 units  
@@ -250,11 +233,13 @@ Average inspection time:
 
 **1.93 seconds per unit**
 
------------------------------------------------------------------------
+The results demonstrate the feasibility of **low‑cost deep learning systems for industrial inspection tasks**.
+
+---
 
 # Installation
 
-Create project folder:
+Create project directory:
 
 C:\SVC_INSPECAO_MOLAS
 
@@ -270,36 +255,38 @@ Install dependencies:
 
 pip install -r requirements.txt
 
------------------------------------------------------------------------
+---
 
 # Running the System
 
 streamlit run app_camera_infer_dual_freeze.py
 
------------------------------------------------------------------------
+---
 
 # Research Context
 
-This software was developed as part of research on **automated industrial
-inspection using computer vision and deep learning**.
+This system contributes to research in:
 
-The project contributes to **Smart Manufacturing and Industry 4.0** by
-providing a low‑cost automated inspection solution for electronic
-manufacturing lines.
+• Industrial computer vision  
+• Automated quality inspection  
+• Deep learning for manufacturing  
+• Smart Manufacturing / Industry 4.0
 
-The system evolved from a **laboratory prototype into an industrially
-validated solution**, increasing its Technology Readiness Level (TRL).
+The project demonstrates the feasibility of **deploying deep learning‑based inspection systems using low‑cost hardware in real manufacturing environments**.
 
------------------------------------------------------------------------
+---
 
-# How to Cite
+# Citation
+
+If you use this system in research or industrial projects, please cite:
 
 Matos, A. G. (2026)  
 **SVC — Computer Vision System for Spring Inspection**  
+Version 1.0.1  
 Zenodo  
-https://doi.org/10.5281/zenodo.19207170
+https://doi.org/10.5281/zenodo.19323586
 
------------------------------------------------------------------------
+---
 
 # Author
 
@@ -309,15 +296,14 @@ Engineer — Computer Vision and Embedded Systems
 Professional Master's in Electrical Engineering  
 Universidade do Estado do Amazonas (UEA)
 
-Advisor:
+Advisor  
 Prof. Dr. Carlos Maurício Seródio Figueiredo
 
-Co‑Advisor:
+Co‑Advisor  
 Prof. Dr. Jozias Parente de Oliveira
 
------------------------------------------------------------------------
+---
 
 # License
 
-MIT License — Open source software for research and industrial
-experimentation.
+MIT License — Open source software for research and industrial experimentation.
