@@ -1,0 +1,72 @@
+GUIA RÁPIDO — COMO EDITAR OS JSONs DO SVC
+
+1) ATIVAR OU DESATIVAR TODOS OS ENVIOS AUTOMÁTICOS
+Arquivo: config_relatorios_automaticos.json
+Campo: auto_send_enabled
+- true  = ativa tudo que estiver habilitado
+- false = desativa todos os envios automáticos
+
+2) ATIVAR OU DESATIVAR UM TURNO ESPECÍFICO
+Arquivo: config_relatorios_automaticos.json
+Blocos:
+- shift_reports > turno_1 > ativo
+- shift_reports > turno_2 > ativo
+- shift_reports > turno_3 > ativo
+Use:
+- true  = turno ativo
+- false = turno inativo
+
+3) EXEMPLO: ATIVAR O TURNO 3
+Procure este bloco:
+"turno_3": {
+  "ativo": false,
+  ...
+}
+Troque para:
+"turno_3": {
+  "ativo": true,
+  ...
+}
+
+4) EXEMPLO: DESATIVAR O TURNO 2
+Procure este bloco:
+"turno_2": {
+  "ativo": true,
+  ...
+}
+Troque para:
+"turno_2": {
+  "ativo": false,
+  ...
+}
+
+5) FÉRIAS COLETIVAS / PARADA GERAL DA LINHA
+A forma mais segura é:
+- NÃO mexer nos horários dos turnos
+- Apenas trocar:
+  "auto_send_enabled": true
+para:
+  "auto_send_enabled": false
+
+Quando a linha voltar:
+  "auto_send_enabled": true
+
+6) RELATÓRIO DIÁRIO, SEMANAL E MENSAL
+Campos:
+- daily_report > enabled
+- weekly_report > enabled
+- monthly_report > enabled
+Use:
+- true  = ativa
+- false = desativa
+
+7) CUIDADO AO EDITAR
+- Não remova vírgulas
+- Não remova aspas
+- Não altere nomes das chaves
+- Mantenha horários no formato HH:MM
+
+8) HISTÓRICO DE ENVIO
+Arquivo: historico_envio_relatorios.json
+Esse arquivo existe para impedir envio duplicado.
+Normalmente não precisa editar manualmente.

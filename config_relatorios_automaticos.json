@@ -1,0 +1,105 @@
+{
+  "_comentario_geral": "ARQUIVO DE CONFIGURACAO DOS ENVIOS AUTOMATICOS DE RELATORIOS DO SVC. Mude somente os valores indicados. Use true para ativar e false para desativar.",
+  "timezone": "America/Manaus",
+  "auto_send_enabled": true,
+  "_comentario_auto_send_enabled": "CHAVE GERAL. true = habilita automacao; false = desliga todos os envios automaticos sem apagar as configuracoes.",
+
+  "shift_reports": {
+    "enabled": true,
+    "_comentario_enabled": "true = permite envios por turno; false = desliga todos os envios por turno.",
+
+    "turno_1": {
+      "ativo": true,
+      "_comentario_ativo": "PARA ATIVAR O TURNO, use true. PARA DESATIVAR O TURNO, use false.",
+      "inicio": "06:00",
+      "fim": "14:00",
+      "dias": ["segunda", "terca", "quarta", "quinta", "sexta", "sabado"],
+      "_comentario_dias": "Dias em que esse turno existe. Se precisar parar a linha temporariamente, voce pode esvaziar esta lista [] ou colocar ativo=false.",
+      "enviar_ao_final": true,
+      "_comentario_enviar_ao_final": "true = envia automaticamente no fim do turno; false = nao envia esse turno automaticamente.",
+      "descricao": "Primeiro turno padrao da fabrica"
+    },
+
+    "turno_2": {
+      "ativo": true,
+      "_comentario_ativo": "PARA ATIVAR O TURNO, use true. PARA DESATIVAR O TURNO, use false.",
+      "inicio": "14:00",
+      "fim": "22:00",
+      "dias": ["segunda", "terca", "quarta", "quinta", "sexta", "sabado"],
+      "_comentario_dias": "Dias em que esse turno existe. Se o segundo turno for suspenso, troque ativo para false.",
+      "enviar_ao_final": true,
+      "_comentario_enviar_ao_final": "true = envia automaticamente no fim do turno; false = nao envia esse turno automaticamente.",
+      "descricao": "Segundo turno padrao da fabrica"
+    },
+
+    "turno_3": {
+      "ativo": false,
+      "_comentario_ativo": "Atualmente inativo. Quando a fabrica voltar a operar com 3o turno, troque para true.",
+      "inicio": "22:00",
+      "fim": "06:00",
+      "dias": ["domingo", "segunda", "terca", "quarta", "quinta", "sexta"],
+      "_comentario_dias": "Terceiro turno iniciando a noite e terminando no dia seguinte pela manha.",
+      "enviar_ao_final": true,
+      "_comentario_enviar_ao_final": "true = envia automaticamente no fim do turno; false = nao envia esse turno automaticamente.",
+      "descricao": "Terceiro turno padrao da industria"
+    }
+  },
+
+  "daily_report": {
+    "enabled": false,
+    "_comentario_enabled": "true = ativa envio diario consolidado; false = desativa.",
+    "horario_envio": "22:05",
+    "_comentario_horario_envio": "Horario do envio diario no formato HH:MM. Exemplo: 22:05"
+  },
+
+  "weekly_report": {
+    "enabled": false,
+    "_comentario_enabled": "true = ativa envio semanal; false = desativa.",
+    "dia_envio": "sabado",
+    "_comentario_dia_envio": "Dia do envio semanal. Exemplos: segunda, sexta, sabado.",
+    "horario_envio": "22:10",
+    "_comentario_horario_envio": "Horario do envio semanal no formato HH:MM."
+  },
+
+  "monthly_report": {
+    "enabled": false,
+    "_comentario_enabled": "true = ativa envio mensal; false = desativa.",
+    "dia_envio": 30,
+    "_comentario_dia_envio": "Dia do mes para enviar o relatorio mensal. Exemplo: 30.",
+    "horario_envio": "22:15",
+    "_comentario_horario_envio": "Horario do envio mensal no formato HH:MM."
+  },
+
+  "attachments": {
+    "pdf": true,
+    "_comentario_pdf": "true = anexa PDF no email; false = nao anexa PDF.",
+    "html": true,
+    "_comentario_html": "true = anexa HTML no email; false = nao anexa HTML."
+  },
+
+  "email": {
+    "usar_config_email_json": true,
+    "_comentario_usar_config_email_json": "true = usa os dados ja salvos em config_email.json e email_contacts.json.",
+    "assunto_prefixo": "[SVC RELATORIO AUTOMATICO]",
+    "_comentario_assunto_prefixo": "Texto que aparecera no inicio do assunto do email automatico."
+  },
+
+  "paradas_programadas": {
+    "enabled": false,
+    "_comentario_enabled": "USE ESTE BLOCO PARA FERIAS COLETIVAS, MANUTENCAO ANUAL OU LINHA PARADA. true = respeita as paradas cadastradas; false = ignora este bloco.",
+    "periodos": [
+      {
+        "nome": "Ferias coletivas exemplo",
+        "ativo": false,
+        "_comentario_ativo": "Quando houver parada real, troque para true. Quando acabar a parada, volte para false.",
+        "data_inicio": "2026-12-20",
+        "_comentario_data_inicio": "Formato obrigatorio: AAAA-MM-DD",
+        "data_fim": "2027-01-05",
+        "_comentario_data_fim": "Formato obrigatorio: AAAA-MM-DD",
+        "bloquear_envios": true,
+        "_comentario_bloquear_envios": "true = durante esse periodo o sistema nao deve enviar relatorios automaticos.",
+        "observacao": "Use este periodo para ferias coletivas, manutencao preventiva anual ou parada geral da linha."
+      }
+    ]
+  }
+}

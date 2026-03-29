@@ -32,6 +32,10 @@ import platform
 import subprocess
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
+import smtplib
+import ssl
+import mimetypes
+from email.message import EmailMessage
 
 import numpy as np
 import cv2
@@ -484,6 +488,9 @@ LABELS_PATH = BASE_DIR / "labels.json"
 CONFIG_PATH = BASE_DIR / "config_molas.json"
 REGISTRY_PATH = BASE_DIR / "models_registry.json"
 EMAIL_CONFIG_PATH = BASE_DIR / "config_email.json"
+EMAIL_CONTACTS_PATH = BASE_DIR / "email_contacts.json"
+AUTO_REPORT_CONFIG_PATH = BASE_DIR / "config_relatorios_automaticos.json"
+AUTO_REPORT_HISTORY_PATH = BASE_DIR / "historico_envio_relatorios.json"
 
 IMG_SIZE = (224, 224)
 DEFAULT_THRESH_PRESENTE = 0.80
@@ -899,8 +906,25 @@ def init_session():
     st.session_state.setdefault("smtp_server", "smtp.office365.com")
     st.session_state.setdefault("smtp_port", 587)
     st.session_state.setdefault("smtp_user", "")
+    st.session_state.setdefault("smtp_password", "")
     st.session_state.setdefault("smtp_use_tls", True)
     st.session_state.setdefault("email_config_loaded", False)
+    st.session_state.setdefault("email_config_reload_pending", False)
+    st.session_state.setdefault("email_config_reload_notice", "")
+    st.session_state.setdefault("email_bootstrap_ok", False)
+    st.session_state.setdefault("email_last_saved_at", "")
+    st.session_state.setdefault("email_last_save_error", "")
+
+    # automação de relatórios por JSON
+    st.session_state.setdefault("auto_reports_enabled", False)
+    st.session_state.setdefault("auto_reports_cfg_loaded", False)
+    st.session_state.setdefault("auto_reports_status_msg", "")
+    st.session_state.setdefault("auto_reports_last_check", "")
+
+    # simulação por upload (modo Engenharia)
+    st.session_state.setdefault("upload_test_frame", None)
+    st.session_state.setdefault("upload_test_name", "")
+    st.session_state.setdefault("upload_test_count_kpi", False)
 
     # evidências / auditoria
     st.session_state.setdefault("evidence_auto_enabled", True)
@@ -985,6 +1009,45 @@ def save_email_config(payload: dict) -> None:
     EMAIL_CONFIG_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def load_email_contacts() -> dict:
+    try:
+        if EMAIL_CONTACTS_PATH.exists():
+            data = json.loads(EMAIL_CONTACTS_PATH.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+def save_email_contacts(payload: dict) -> None:
+    EMAIL_CONTACTS_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _join_email_values(values) -> str:
+    if isinstance(values, list):
+        return "; ".join([str(x).strip() for x in values if str(x).strip()])
+    return str(values or "").strip()
+
+
+def apply_email_contacts_to_session(cfg: dict) -> None:
+    if not isinstance(cfg, dict):
+        return
+    if "to" in cfg:
+        st.session_state["email_to"] = _join_email_values(cfg.get("to", []))
+    if "cc" in cfg:
+        st.session_state["email_cc"] = _join_email_values(cfg.get("cc", []))
+    if "bcc" in cfg:
+        st.session_state["email_bcc"] = _join_email_values(cfg.get("bcc", []))
+
+
+def collect_email_contacts_from_session() -> dict:
+    return {
+        "to": [x.strip() for x in re.split(r'[;,]+', str(st.session_state.get("email_to", ""))) if x.strip()],
+        "cc": [x.strip() for x in re.split(r'[;,]+', str(st.session_state.get("email_cc", ""))) if x.strip()],
+        "bcc": [x.strip() for x in re.split(r'[;,]+', str(st.session_state.get("email_bcc", ""))) if x.strip()],
+    }
+
+
 def apply_email_config_to_session(cfg: dict) -> None:
     if not isinstance(cfg, dict):
         return
@@ -992,9 +1055,6 @@ def apply_email_config_to_session(cfg: dict) -> None:
     st.session_state["email_send_on_generate"] = bool(cfg.get("email_send_on_generate", False))
     st.session_state["email_auto_daily_enabled"] = bool(cfg.get("email_auto_daily_enabled", False))
     st.session_state["email_daily_time"] = str(cfg.get("email_daily_time", "17:30"))
-    st.session_state["email_to"] = str(cfg.get("email_to", ""))
-    st.session_state["email_cc"] = str(cfg.get("email_cc", ""))
-    st.session_state["email_bcc"] = str(cfg.get("email_bcc", ""))
     st.session_state["email_subject_prefix"] = str(cfg.get("email_subject_prefix", "[SVC] Relatório de Auditoria"))
     st.session_state["email_sender_name"] = str(cfg.get("email_sender_name", "SVC Inspeção de Molas"))
     st.session_state["smtp_server"] = str(cfg.get("smtp_server", "smtp.office365.com"))
@@ -1003,6 +1063,7 @@ def apply_email_config_to_session(cfg: dict) -> None:
     except Exception:
         st.session_state["smtp_port"] = 587
     st.session_state["smtp_user"] = str(cfg.get("smtp_user", ""))
+    st.session_state["smtp_password"] = str(cfg.get("smtp_password", ""))
     st.session_state["smtp_use_tls"] = bool(cfg.get("smtp_use_tls", True))
 
 
@@ -1012,16 +1073,39 @@ def collect_email_config_from_session() -> dict:
         "email_send_on_generate": bool(st.session_state.get("email_send_on_generate", False)),
         "email_auto_daily_enabled": bool(st.session_state.get("email_auto_daily_enabled", False)),
         "email_daily_time": str(st.session_state.get("email_daily_time", "17:30")),
-        "email_to": str(st.session_state.get("email_to", "")).strip(),
-        "email_cc": str(st.session_state.get("email_cc", "")).strip(),
-        "email_bcc": str(st.session_state.get("email_bcc", "")).strip(),
         "email_subject_prefix": str(st.session_state.get("email_subject_prefix", "[SVC] Relatório de Auditoria")).strip(),
         "email_sender_name": str(st.session_state.get("email_sender_name", "SVC Inspeção de Molas")).strip(),
         "smtp_server": str(st.session_state.get("smtp_server", "smtp.office365.com")).strip(),
         "smtp_port": int(st.session_state.get("smtp_port", 587)),
         "smtp_user": str(st.session_state.get("smtp_user", "")).strip(),
+        "smtp_password": str(st.session_state.get("smtp_password", "")).strip(),
         "smtp_use_tls": bool(st.session_state.get("smtp_use_tls", True)),
     }
+
+
+def bootstrap_email_settings() -> None:
+    cfg = load_email_config()
+    contacts = load_email_contacts()
+
+    if not contacts:
+        migrated = {
+            "to": [x.strip() for x in re.split(r'[;,]+', str(cfg.get("email_to", ""))) if x.strip()],
+            "cc": [x.strip() for x in re.split(r'[;,]+', str(cfg.get("email_cc", ""))) if x.strip()],
+            "bcc": [x.strip() for x in re.split(r'[;,]+', str(cfg.get("email_bcc", ""))) if x.strip()],
+        }
+        if migrated["to"] or migrated["cc"] or migrated["bcc"]:
+            contacts = migrated
+            try:
+                save_email_contacts(contacts)
+            except Exception:
+                pass
+
+    apply_email_config_to_session(cfg)
+    apply_email_contacts_to_session(contacts)
+    st.session_state["email_config_loaded"] = True
+    st.session_state["email_bootstrap_ok"] = bool(
+        st.session_state.get("smtp_user") or st.session_state.get("email_to") or st.session_state.get("email_cc") or st.session_state.get("email_bcc")
+    )
 
 
 def email_status_summary() -> str:
@@ -1030,6 +1114,38 @@ def email_status_summary() -> str:
         return "E-mail: DESLIGADO"
     to_count = len([x for x in re.split(r'[;,]+', str(st.session_state.get("email_to", ""))) if x.strip()])
     return f"E-mail: ATIVO | Destinatários: {to_count}"
+
+
+def persist_email_settings_if_needed(force: bool = False) -> bool:
+    """Salva automaticamente as configurações/contatos de e-mail em JSON.
+    Retorna True quando houve gravação em disco.
+    """
+    try:
+        cfg = collect_email_config_from_session()
+        contacts = collect_email_contacts_from_session()
+
+        current_cfg = load_email_config()
+        current_contacts = load_email_contacts()
+
+        if force or cfg != current_cfg:
+            save_email_config(cfg)
+            changed_cfg = True
+        else:
+            changed_cfg = False
+
+        if force or contacts != current_contacts:
+            save_email_contacts(contacts)
+            changed_contacts = True
+        else:
+            changed_contacts = False
+
+        if changed_cfg or changed_contacts:
+            st.session_state["email_bootstrap_ok"] = True
+            st.session_state["email_last_saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return True
+    except Exception as e:
+        st.session_state["email_last_save_error"] = str(e)
+    return False
 
 def get_effective_config(model_key: str) -> dict:
     """
@@ -1111,8 +1227,12 @@ if ("threshold_presente" not in st.session_state) or ("threshold_ng_ok" not in s
     apply_config_to_session(get_effective_config(st.session_state.get("selected_model_key", "MODELO_PADRAO")))
 
 if not st.session_state.get("email_config_loaded", False):
-    apply_email_config_to_session(load_email_config())
-    st.session_state["email_config_loaded"] = True
+    bootstrap_email_settings()
+
+if st.session_state.get("email_config_reload_pending", False):
+    bootstrap_email_settings()
+    st.session_state["email_config_reload_pending"] = False
+    st.session_state["email_config_reload_notice"] = "Configuração de e-mail e contatos recarregada ✅"
 
 # ==========================================================
 # DATASET (APRENDIZADO) — CAPTURA E SALVAMENTO
@@ -1671,6 +1791,198 @@ def read_one_frame_timeout(cap, timeout_s: float = 1.5):
     return out["frame"]
 
 
+
+
+def decide_misaligned_status(prob_ng: float, prob_ok: float, thr_ng_ok: float, thr_ng_ng: float, margin_abs: float = 0.10):
+    """Decisão industrial para desalinhamento com banda de atenção."""
+    prob_ng = float(prob_ng)
+    prob_ok = float(prob_ok)
+    thr_ng_ok = float(thr_ng_ok)
+    thr_ng_ng = float(thr_ng_ng)
+    margin_abs = float(margin_abs)
+
+    margin = prob_ng - prob_ok
+
+    if prob_ng >= thr_ng_ng and margin >= margin_abs:
+        return "NG_MISALIGNED", "NG_STRONG", margin, False
+    if prob_ng >= thr_ng_ng and margin < margin_abs:
+        return "OK", "ATTENTION", margin, True
+    if prob_ng >= thr_ng_ok:
+        return "OK", "ATTENTION", margin, True
+    return "OK", "OK_SAFE", margin, False
+
+
+def infer_dual_on_frame(frame_bgr: np.ndarray):
+    """Inferência DUAL com lógica industrial calibrada para chão de fábrica.
+
+    Saídas industriais:
+      - OK
+      - NG_MISSING
+      - NG_MISALIGNED
+    """
+
+    esq_x0 = int(st.session_state.get("roi_esq_x0", DEFAULT_ROI["ESQ"]["x0"]))
+    esq_x1 = int(st.session_state.get("roi_esq_x1", DEFAULT_ROI["ESQ"]["x1"]))
+    esq_y0 = int(st.session_state.get("roi_esq_y0", DEFAULT_ROI["ESQ"]["y0"]))
+    esq_y1 = int(st.session_state.get("roi_esq_y1", DEFAULT_ROI["ESQ"]["y1"]))
+
+    dir_x0 = int(st.session_state.get("roi_dir_x0", DEFAULT_ROI["DIR"]["x0"]))
+    dir_x1 = int(st.session_state.get("roi_dir_x1", DEFAULT_ROI["DIR"]["x1"]))
+    dir_y0 = int(st.session_state.get("roi_dir_y0", DEFAULT_ROI["DIR"]["y0"]))
+    dir_y1 = int(st.session_state.get("roi_dir_y1", DEFAULT_ROI["DIR"]["y1"]))
+
+    normalize_roi = bool(st.session_state.get("normalize_lab_equalize", DEFAULT_NORMALIZE_LAB))
+
+    roi_esq = crop_roi_percent(frame_bgr, esq_x0, esq_x1, esq_y0, esq_y1)
+    roi_dir = crop_roi_percent(frame_bgr, dir_x0, dir_x1, dir_y0, dir_y1)
+
+    if normalize_roi:
+        roi_esq = equalize_lab_bgr(roi_esq)
+        roi_dir = equalize_lab_bgr(roi_dir)
+
+    th_presente = float(st.session_state.get("threshold_presente", DEFAULT_THRESH_PRESENTE))
+
+    p_pres_esq = 1.0
+    p_pres_dir = 1.0
+    cls_pres_esq = "mola_presente"
+    cls_pres_dir = "mola_presente"
+    probs_pres_esq = None
+    probs_pres_dir = None
+
+    try:
+        ensure_model_loaded_or_raise(blocking=True)
+        if st.session_state.get("model") is not None and st.session_state.get("labels") is not None:
+            cls_pres_esq, conf_esq_, probs_pres_esq = predict_one(
+                st.session_state["model"], st.session_state["labels"], roi_esq
+            )
+            cls_pres_dir, conf_dir_, probs_pres_dir = predict_one(
+                st.session_state["model"], st.session_state["labels"], roi_dir
+            )
+            p_pres_esq = prob_of_class(st.session_state["labels"], probs_pres_esq, "mola_presente")
+            p_pres_dir = prob_of_class(st.session_state["labels"], probs_pres_dir, "mola_presente")
+    except Exception:
+        pass
+
+    missing_esq = (p_pres_esq < th_presente)
+    missing_dir = (p_pres_dir < th_presente)
+
+    use_mnv2 = bool(st.session_state.get("use_mnv2_prod", True))
+
+    cls_mis_esq = "OK"
+    cls_mis_dir = "OK"
+    prob_ng_esq = 0.0
+    prob_ng_dir = 0.0
+    prob_ok_esq = 1.0
+    prob_ok_dir = 1.0
+    probs_mis_esq = None
+    probs_mis_dir = None
+
+    thr_ng_ok = float(st.session_state.get("threshold_ng_ok", DEFAULT_THR_NG_OK))
+    thr_ng_ng = float(st.session_state.get("threshold_ng_ng", DEFAULT_THR_NG_NG))
+    margin_abs = float(st.session_state.get("prod_margin_abs", 0.10))
+
+    decision_band_esq = "MISSING" if missing_esq else "OK_SAFE"
+    decision_band_dir = "MISSING" if missing_dir else "OK_SAFE"
+    margin_esq = 1.0
+    margin_dir = 1.0
+    attention_esq = False
+    attention_dir = False
+
+    if use_mnv2:
+        ensure_prod_model_loaded_or_raise(blocking=True)
+        model = st.session_state.get("prod_model")
+        class_names = st.session_state.get("prod_class_names")
+        pos_idx = int(st.session_state.get("prod_pos_idx", 0))
+        img_size = tuple(st.session_state.get("prod_img_size", (224, 224)))
+
+        if model is None or class_names is None:
+            raise RuntimeError("Modelo PRODUÇÃO não carregado.")
+
+        if not missing_esq:
+            _, prob_ng_esq, probs_mis_esq = infer_mobilenetv2_prod(
+                roi_esq, model, class_names, pos_idx, thr_ng_ng, img_size=img_size
+            )
+            prob_ok_esq = float((probs_mis_esq or {}).get("OK", 1.0 - prob_ng_esq))
+            cls_mis_esq, decision_band_esq, margin_esq, attention_esq = decide_misaligned_status(
+                prob_ng_esq, prob_ok_esq, thr_ng_ok, thr_ng_ng, margin_abs=margin_abs
+            )
+        else:
+            cls_mis_esq, prob_ng_esq, probs_mis_esq = ("OK", 0.0, None)
+
+        if not missing_dir:
+            _, prob_ng_dir, probs_mis_dir = infer_mobilenetv2_prod(
+                roi_dir, model, class_names, pos_idx, thr_ng_ng, img_size=img_size
+            )
+            prob_ok_dir = float((probs_mis_dir or {}).get("OK", 1.0 - prob_ng_dir))
+            cls_mis_dir, decision_band_dir, margin_dir, attention_dir = decide_misaligned_status(
+                prob_ng_dir, prob_ok_dir, thr_ng_ok, thr_ng_ng, margin_abs=margin_abs
+            )
+        else:
+            cls_mis_dir, prob_ng_dir, probs_mis_dir = ("OK", 0.0, None)
+
+    mis_esq = (cls_mis_esq == "NG_MISALIGNED") and (not missing_esq)
+    mis_dir = (cls_mis_dir == "NG_MISALIGNED") and (not missing_dir)
+
+    defect_esq = "OK"
+    defect_dir = "OK"
+
+    if missing_esq:
+        defect_esq = "NG_MISSING"
+    elif mis_esq:
+        defect_esq = "NG_MISALIGNED"
+
+    if missing_dir:
+        defect_dir = "NG_MISSING"
+    elif mis_dir:
+        defect_dir = "NG_MISALIGNED"
+
+    if defect_esq == "NG_MISSING" or defect_dir == "NG_MISSING":
+        defect_type = "NG_MISSING"
+    elif defect_esq == "NG_MISALIGNED" or defect_dir == "NG_MISALIGNED":
+        defect_type = "NG_MISALIGNED"
+    else:
+        defect_type = "OK"
+
+    attention_flag = bool(attention_esq or attention_dir)
+    aprovado = (defect_type == "OK")
+    ok_esq = (defect_esq == "OK")
+    ok_dir = (defect_dir == "OK")
+
+    return {
+        "roi_esq": roi_esq,
+        "roi_dir": roi_dir,
+        "cls_esq": cls_pres_esq,
+        "cls_dir": cls_pres_dir,
+        "p_pres_esq": float(p_pres_esq),
+        "p_pres_dir": float(p_pres_dir),
+        "conf_esq": float(p_pres_esq),
+        "conf_dir": float(p_pres_dir),
+        "cls_mnv2_esq": cls_mis_esq,
+        "cls_mnv2_dir": cls_mis_dir,
+        "prob_ng_esq": float(prob_ng_esq),
+        "prob_ng_dir": float(prob_ng_dir),
+        "prob_ok_esq": float(prob_ok_esq),
+        "prob_ok_dir": float(prob_ok_dir),
+        "thr_ng": float(thr_ng_ng),
+        "thr_ng_ok": float(thr_ng_ok),
+        "thr_ng_ng": float(thr_ng_ng),
+        "margin_esq": float(margin_esq),
+        "margin_dir": float(margin_dir),
+        "decision_band_esq": decision_band_esq,
+        "decision_band_dir": decision_band_dir,
+        "attention_esq": bool(attention_esq),
+        "attention_dir": bool(attention_dir),
+        "attention_flag": attention_flag,
+        "probs_esq": probs_mis_esq,
+        "probs_dir": probs_mis_dir,
+        "defect_esq": defect_esq,
+        "defect_dir": defect_dir,
+        "defect_type": defect_type,
+        "ok_esq": ok_esq,
+        "ok_dir": ok_dir,
+        "aprovado": aprovado,
+    }
+
 def infer_dual_on_frame_timeout(frame_bgr, timeout_s: float = 4.0):
     """Executa a inferência com timeout (protege contra travamentos raros do backend/TF)."""
     out = {"res": None, "err": None}
@@ -2097,6 +2409,108 @@ def ensure_active_model_loaded_or_raise(blocking: bool = False):
         if st.session_state.get("model") is None or st.session_state.get("labels") is None:
             raise RuntimeError("Modelo LEGACY não carregado.")
 
+def decode_uploaded_image_to_bgr(uploaded_file) -> np.ndarray:
+    """Decodifica UploadedFile/bytes em imagem BGR para inferência offline."""
+    if uploaded_file is None:
+        raise ValueError("Nenhum arquivo enviado.")
+
+    data = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+    if not data:
+        raise ValueError("Arquivo de imagem vazio.")
+
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Não foi possível decodificar a imagem enviada.")
+    return img
+
+
+def run_infer_dual_on_uploaded_frame(frame_bgr: np.ndarray, file_name: str = "upload", update_metrics: bool = False):
+    """Executa a inferência DUAL em uma imagem enviada manualmente (sem câmera/sensor)."""
+    try:
+        ensure_active_model_loaded_or_raise(blocking=True)
+    except Exception as e:
+        st.session_state["last_error"] = f"Falha ao carregar modelo atual: {e}"
+        st.session_state["last_result"] = None
+        return None
+
+    if frame_bgr is None or getattr(frame_bgr, 'size', 0) == 0:
+        st.session_state["last_error"] = "Imagem enviada inválida para inferência."
+        st.session_state["last_result"] = None
+        return None
+
+    src = frame_bgr.copy()
+    st.session_state["display_frame"] = src.copy()
+    st.session_state["last_frame"] = src.copy()
+    st.session_state["upload_test_frame"] = src.copy()
+    st.session_state["upload_test_name"] = str(file_name or "upload")
+    st.session_state["last_infer_sig"] = quick_frame_signature(src)
+    st.session_state["last_infer_ts"] = time.time()
+
+    start_dt = datetime.now()
+    try:
+        res = infer_dual_on_frame(src)
+        end_dt = datetime.now()
+        st.session_state["last_result"] = res
+        st.session_state["last_error"] = None
+
+        if bool(update_metrics):
+            update_metrics_and_history(res)
+
+        st.session_state["last_warning"] = f"Inspeção por upload executada: {file_name}"
+        return res
+    except Exception as e:
+        st.session_state["last_error"] = f"Falha na inferência por upload: {e}"
+        st.session_state["last_result"] = None
+        return None
+
+
+
+def update_metrics_and_history(res: dict) -> None:
+    """Atualiza contadores de produção e histórico (shim antecipado para upload)."""
+    st.session_state["cnt_total"] = int(st.session_state.get("cnt_total", 0)) + 1
+
+    aprovado = bool(res.get("aprovado", False))
+    if aprovado:
+        st.session_state["cnt_ok"] = int(st.session_state.get("cnt_ok", 0)) + 1
+        if bool(res.get("attention_flag", False)):
+            st.session_state["cnt_ok_attention"] = int(st.session_state.get("cnt_ok_attention", 0)) + 1
+    else:
+        st.session_state["cnt_ng"] = int(st.session_state.get("cnt_ng", 0)) + 1
+        if not bool(res.get("ok_esq", True)):
+            st.session_state["cnt_ng_esq"] = int(st.session_state.get("cnt_ng_esq", 0)) + 1
+        if not bool(res.get("ok_dir", True)):
+            st.session_state["cnt_ng_dir"] = int(st.session_state.get("cnt_ng_dir", 0)) + 1
+
+        defect_esq = str(res.get("defect_esq", "OK") or "OK").strip().upper()
+        defect_dir = str(res.get("defect_dir", "OK") or "OK").strip().upper()
+
+        if defect_esq == "NG_MISSING" and defect_dir == "OK":
+            st.session_state["cnt_missing_esq"] = int(st.session_state.get("cnt_missing_esq", 0)) + 1
+        elif defect_esq == "OK" and defect_dir == "NG_MISSING":
+            st.session_state["cnt_missing_dir"] = int(st.session_state.get("cnt_missing_dir", 0)) + 1
+        elif defect_esq == "NG_MISSING" and defect_dir == "NG_MISSING":
+            st.session_state["cnt_missing_both"] = int(st.session_state.get("cnt_missing_both", 0)) + 1
+        elif defect_esq == "NG_MISALIGNED" and defect_dir == "OK":
+            st.session_state["cnt_misaligned_esq"] = int(st.session_state.get("cnt_misaligned_esq", 0)) + 1
+        elif defect_esq == "OK" and defect_dir == "NG_MISALIGNED":
+            st.session_state["cnt_misaligned_dir"] = int(st.session_state.get("cnt_misaligned_dir", 0)) + 1
+        elif defect_esq == "NG_MISALIGNED" and defect_dir == "NG_MISALIGNED":
+            st.session_state["cnt_misaligned_both"] = int(st.session_state.get("cnt_misaligned_both", 0)) + 1
+        else:
+            st.session_state["cnt_misto"] = int(st.session_state.get("cnt_misto", 0)) + 1
+
+    history = list(st.session_state.get("history", []))
+    history.append({
+        "ts": datetime.now().strftime("%H:%M:%S"),
+        "total": int(st.session_state.get("cnt_total", 0)),
+        "ok": int(st.session_state.get("cnt_ok", 0)),
+        "ng": int(st.session_state.get("cnt_ng", 0)),
+        "yield_pct": (float(st.session_state.get("cnt_ok", 0)) / max(1, float(st.session_state.get("cnt_total", 1)))) * 100.0,
+        "result": "OK" if aprovado else str(res.get("defect_type", "NG")),
+    })
+    st.session_state["history"] = history[-500:]
+
 # ==========================================================
 # LOG CSV
 # ==========================================================
@@ -2353,6 +2767,276 @@ def generate_audit_report_files() -> tuple[Path, Path]:
     st.session_state['last_report_generated_at'] = snapshot['generated_at']
     return pdf_path, html_path
 
+
+def _parse_email_list(raw: str) -> list[str]:
+    items = []
+    for part in re.split(r'[;,]+', str(raw or '')):
+        part = part.strip()
+        if part:
+            items.append(part)
+    return items
+
+
+def _build_email_subject() -> str:
+    prefix = str(st.session_state.get("email_subject_prefix", "[SVC] Relatório de Auditoria")).strip()
+    when = datetime.now().strftime("%Y-%m-%d %H:%M")
+    line_name = str(st.session_state.get("line_name", "L01")).strip() or "L01"
+    return f"{prefix} Relatório de Auditoria - {line_name} - {when}"
+
+
+def send_report_email(pdf_path: str | Path, html_path: str | Path | None = None) -> tuple[bool, str]:
+    pdf_path = Path(pdf_path)
+    html_path = Path(html_path) if html_path else None
+
+    if not pdf_path.exists():
+        return False, f"PDF não encontrado: {pdf_path}"
+
+    to_list = _parse_email_list(st.session_state.get("email_to", ""))
+    cc_list = _parse_email_list(st.session_state.get("email_cc", ""))
+    bcc_list = _parse_email_list(st.session_state.get("email_bcc", ""))
+    recipients = to_list + cc_list + bcc_list
+    if not recipients:
+        return False, "Nenhum destinatário configurado em Para/CC/BCC."
+
+    smtp_server = str(st.session_state.get("smtp_server", "")).strip()
+    smtp_user = str(st.session_state.get("smtp_user", "")).strip()
+    smtp_password = str(st.session_state.get("smtp_password", "")).strip()
+    sender_name = str(st.session_state.get("email_sender_name", "SVC Inspeção de Molas")).strip() or "SVC Inspeção de Molas"
+    use_tls = bool(st.session_state.get("smtp_use_tls", True))
+    try:
+        smtp_port = int(st.session_state.get("smtp_port", 587))
+    except Exception:
+        smtp_port = 587
+
+    if not smtp_server:
+        return False, "SMTP server não configurado."
+    if not smtp_user:
+        return False, "SMTP user não configurado."
+    if not smtp_password:
+        return False, "SMTP password não configurado."
+
+    snapshot = report_summary_snapshot()
+    subject = _build_email_subject()
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{sender_name} <{smtp_user}>"
+    if to_list:
+        msg["To"] = ", ".join(to_list)
+    if cc_list:
+        msg["Cc"] = ", ".join(cc_list)
+
+    body = f"""Olá,
+
+Segue em anexo o relatório de auditoria do SVC.
+
+Emitido em: {snapshot['generated_at']}
+Linha: {snapshot['line_name']}
+Equipamento: {snapshot['equipment_id']}
+Modelo: {snapshot['model_name']}
+OP: {snapshot['production_order']}
+Total: {snapshot['total']}
+OK: {snapshot['ok']}
+NG: {snapshot['ng']}
+Yield: {snapshot['yield_pct']:.2f}%
+
+Este e-mail foi gerado automaticamente pelo SVC.
+"""
+    msg.set_content(body)
+
+    if html_path and html_path.exists():
+        html_body = html_path.read_text(encoding='utf-8', errors='ignore')
+        msg.add_alternative(html_body, subtype='html')
+
+    for fp in [pdf_path, html_path] if html_path else [pdf_path]:
+        if fp and Path(fp).exists():
+            fp = Path(fp)
+            ctype, _ = mimetypes.guess_type(str(fp))
+            if not ctype:
+                ctype = 'application/octet-stream'
+            maintype, subtype = ctype.split('/', 1)
+            with open(fp, 'rb') as f:
+                msg.add_attachment(f.read(), maintype=maintype, subtype=subtype, filename=fp.name)
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=20) as server:
+            server.ehlo()
+            if use_tls:
+                context = ssl.create_default_context()
+                server.starttls(context=context)
+                server.ehlo()
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg, to_addrs=recipients)
+        return True, f"Relatório enviado com sucesso para {len(recipients)} destinatário(s)."
+    except Exception as e:
+        return False, str(e)
+
+
+
+
+# ==========================================================
+# AUTOMAÇÃO DE RELATÓRIOS (JSON)
+# ==========================================================
+def load_auto_report_config() -> dict:
+    try:
+        if AUTO_REPORT_CONFIG_PATH.exists():
+            data = json.loads(AUTO_REPORT_CONFIG_PATH.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+def save_auto_report_history(payload: dict) -> None:
+    AUTO_REPORT_HISTORY_PATH.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def load_auto_report_history() -> dict:
+    try:
+        if AUTO_REPORT_HISTORY_PATH.exists():
+            data = json.loads(AUTO_REPORT_HISTORY_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {"ultimo_envio": {"turno_1": None, "turno_2": None, "turno_3": None, "daily": None, "weekly": None, "monthly": None}, "ultima_atualizacao": None}
+
+def _day_name_pt(dt: datetime) -> str:
+    return ["segunda","terca","quarta","quinta","sexta","sabado","domingo"][dt.weekday()]
+
+def _parse_hhmm(s: str) -> tuple[int,int] | None:
+    try:
+        hh, mm = str(s).strip().split(":", 1)
+        hh = int(hh); mm = int(mm)
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return hh, mm
+    except Exception:
+        pass
+    return None
+
+def _now_auto_report() -> datetime:
+    return datetime.now()
+
+def _make_auto_key(kind: str, now: datetime) -> str:
+    if kind.startswith("turno_") or kind == "daily":
+        return now.strftime("%Y-%m-%d")
+    if kind == "weekly":
+        y, w, _ = now.isocalendar()
+        return f"{y}-W{int(w):02d}"
+    if kind == "monthly":
+        return now.strftime("%Y-%m")
+    return now.strftime("%Y-%m-%d %H:%M")
+
+def _is_time_match(now: datetime, hhmm: str, window_min: int = 2) -> bool:
+    parsed = _parse_hhmm(hhmm)
+    if not parsed:
+        return False
+    hh, mm = parsed
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    diff = abs((now - target).total_seconds())
+    return diff <= window_min * 60
+
+def _auto_send_report(reason_label: str) -> tuple[bool, str]:
+    try:
+        pdf_path, html_path = generate_audit_report_files()
+    except Exception as e:
+        return False, f"Falha ao gerar relatório automático ({reason_label}): {e}"
+    try:
+        ok, msg = send_report_email(pdf_path, html_path)
+        if ok:
+            return True, f"Envio automático OK ({reason_label})"
+        return False, f"Falha no envio automático ({reason_label}): {msg}"
+    except Exception as e:
+        return False, f"Falha no envio automático ({reason_label}): {e}"
+
+def check_auto_report_schedule() -> None:
+    cfg = load_auto_report_config()
+    hist = load_auto_report_history()
+    st.session_state["auto_reports_cfg_loaded"] = bool(cfg)
+    st.session_state["auto_reports_enabled"] = bool(cfg.get("auto_send_enabled", False)) if cfg else False
+
+    now = _now_auto_report()
+    st.session_state["auto_reports_last_check"] = now.strftime("%d/%m/%y %H:%M:%S")
+
+    if not cfg:
+        st.session_state["auto_reports_status_msg"] = "JSON de automação não encontrado."
+        return
+    if not bool(cfg.get("auto_send_enabled", False)):
+        st.session_state["auto_reports_status_msg"] = "Auto envio desativado no JSON."
+        return
+    if not bool(st.session_state.get("email_reports_enabled", False)):
+        st.session_state["auto_reports_status_msg"] = "Auto envio ativo no JSON, mas e-mail está desabilitado no app."
+        return
+
+    ultimo = hist.setdefault("ultimo_envio", {})
+
+    # turnos
+    shift_cfg = cfg.get("shift_reports", {}) if isinstance(cfg.get("shift_reports", {}), dict) else {}
+    if bool(shift_cfg.get("enabled", False)):
+        for turno_key in ["turno_1", "turno_2", "turno_3"]:
+            tcfg = shift_cfg.get(turno_key, {}) if isinstance(shift_cfg.get(turno_key, {}), dict) else {}
+            if not bool(tcfg.get("ativo", False)):
+                continue
+            if not bool(tcfg.get("enviar_ao_final", True)):
+                continue
+            dias = tcfg.get("dias", []) or []
+            if dias and _day_name_pt(now) not in dias:
+                continue
+            if not _is_time_match(now, str(tcfg.get("fim", ""))):
+                continue
+            key = _make_auto_key(turno_key, now)
+            if str(ultimo.get(turno_key)) == key:
+                continue
+            ok, msg = _auto_send_report(turno_key)
+            st.session_state["auto_reports_status_msg"] = msg
+            if ok:
+                ultimo[turno_key] = key
+                hist["ultima_atualizacao"] = now.isoformat(timespec="seconds")
+                save_auto_report_history(hist)
+            return
+
+    # diário
+    daily_cfg = cfg.get("daily_report", {}) if isinstance(cfg.get("daily_report", {}), dict) else {}
+    if bool(daily_cfg.get("enabled", False)) and _is_time_match(now, str(daily_cfg.get("horario_envio", ""))):
+        key = _make_auto_key("daily", now)
+        if str(ultimo.get("daily")) != key:
+            ok, msg = _auto_send_report("daily")
+            st.session_state["auto_reports_status_msg"] = msg
+            if ok:
+                ultimo["daily"] = key
+                hist["ultima_atualizacao"] = now.isoformat(timespec="seconds")
+                save_auto_report_history(hist)
+            return
+
+    weekly_cfg = cfg.get("weekly_report", {}) if isinstance(cfg.get("weekly_report", {}), dict) else {}
+    if bool(weekly_cfg.get("enabled", False)) and str(weekly_cfg.get("dia_envio", "")).strip() == _day_name_pt(now) and _is_time_match(now, str(weekly_cfg.get("horario_envio", ""))):
+        key = _make_auto_key("weekly", now)
+        if str(ultimo.get("weekly")) != key:
+            ok, msg = _auto_send_report("weekly")
+            st.session_state["auto_reports_status_msg"] = msg
+            if ok:
+                ultimo["weekly"] = key
+                hist["ultima_atualizacao"] = now.isoformat(timespec="seconds")
+                save_auto_report_history(hist)
+            return
+
+    monthly_cfg = cfg.get("monthly_report", {}) if isinstance(cfg.get("monthly_report", {}), dict) else {}
+    try:
+        monthly_day = int(monthly_cfg.get("dia_envio", 0))
+    except Exception:
+        monthly_day = 0
+    if bool(monthly_cfg.get("enabled", False)) and monthly_day == now.day and _is_time_match(now, str(monthly_cfg.get("horario_envio", ""))):
+        key = _make_auto_key("monthly", now)
+        if str(ultimo.get("monthly")) != key:
+            ok, msg = _auto_send_report("monthly")
+            st.session_state["auto_reports_status_msg"] = msg
+            if ok:
+                ultimo["monthly"] = key
+                hist["ultima_atualizacao"] = now.isoformat(timespec="seconds")
+                save_auto_report_history(hist)
+            return
+
+    if not st.session_state.get("auto_reports_status_msg"):
+        st.session_state["auto_reports_status_msg"] = "Automação carregada. Aguardando próximo horário configurado."
+
 # ==========================================================
 # ==========================================================
 # STREAMLIT APP
@@ -2399,7 +3083,7 @@ else:
     st.session_state["capture_busy_since"] = 0.0
 
 # Auto-refresh leve (somente se Serial ON e pacote disponível)
-if st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True) and HAS_AUTOREFRESH:
+if ((st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True)) or st.session_state.get("auto_reports_enabled", False)) and HAS_AUTOREFRESH:
     # Mantém o app "respirando" SEMPRE, inclusive se capture_busy travar.
     # Assim o watchdog e o poll do serial continuam rodando.
     if st.session_state.get("capture_busy", False):
@@ -2407,9 +3091,20 @@ if st.session_state.get("serial_on", False) and st.session_state.get("serial_aut
     else:
         interval = 2200 if st.session_state.get("sensor_job_pending", False) else 3000
 
-    st_autorefresh(interval=interval, key="serial_autorefresh_key")
+# Auto-refresh leve (desativado para evitar reset de contadores)
+# st_autorefresh(interval=interval, key="serial_autorefresh_key")
+
+import time
+
+if "last_auto_check" not in st.session_state:
+    st.session_state.last_auto_check = 0
+
+if time.time() - st.session_state.last_auto_check > 30:
+    check_auto_report_schedule()
+    st.session_state.last_auto_check = time.time()
 
 poll_serial_events_and_maybe_trigger()
+check_auto_report_schedule()
 
 # ==========================================================
 # PONTE: pending_trigger (Serial) -> sensor_job_pending (job)
@@ -2436,6 +3131,30 @@ st.markdown("""<style>
     z-index: 9999; pointer-events: none;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
+            
+/* ================================
+   ANDON ALERT STYLE
+================================ */
+
+@keyframes andonBlink {
+    0% { background-color: #ff4b4b; }
+    50% { background-color: #8b0000; }
+    100% { background-color: #ff4b4b; }
+}
+
+.andon-banner {
+    animation: andonBlink 1s infinite;
+    color: white;
+    padding: 20px;
+    font-size: 28px;
+    font-weight: bold;
+    text-align: center;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+/* ================================ */
+            
 .roi-box { background-color: #f4f6f8; border: 1px solid #d0d4d9; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .roi-title { font-weight: 600; font-size: 16px; margin-bottom: 4px; }
 .roi-caption { font-size: 12px; color: #6b7280; margin-bottom: 10px; }
@@ -2837,54 +3556,64 @@ if is_eng:
     st.sidebar.checkbox(
         "Habilitar relatórios por e-mail",
         key="email_reports_enabled",
+        value=bool(st.session_state.get("email_reports_enabled", False)),
         help="Ativa o cadastro e o uso futuro do envio automático/manual de relatórios por e-mail."
     )
     st.sidebar.checkbox(
         "Enviar também ao gerar relatório",
         key="email_send_on_generate",
+        value=bool(st.session_state.get("email_send_on_generate", False)),
         help="Quando o envio real estiver habilitado, permite disparar e-mail logo após gerar o relatório."
     )
     st.sidebar.checkbox(
         "Habilitar envio diário automático",
         key="email_auto_daily_enabled",
+        value=bool(st.session_state.get("email_auto_daily_enabled", False)),
         help="Define a intenção de envio diário automático no horário configurado."
     )
     st.sidebar.text_input(
         "Horário do envio diário",
+        value=str(st.session_state.get("email_daily_time", "17:30")),
         key="email_daily_time",
         placeholder="17:30",
         help="Formato HH:MM. Ex.: 17:30"
     )
     st.sidebar.text_input(
         "Para",
+        value=str(st.session_state.get("email_to", "")),
         key="email_to",
         placeholder="qualidade@empresa.com; gerente@empresa.com",
         help="Separe múltiplos e-mails por ponto e vírgula."
     )
     st.sidebar.text_input(
         "CC",
+        value=str(st.session_state.get("email_cc", "")),
         key="email_cc",
         placeholder="engenharia@empresa.com",
         help="Opcional. Separe múltiplos e-mails por ponto e vírgula."
     )
     st.sidebar.text_input(
         "BCC",
+        value=str(st.session_state.get("email_bcc", "")),
         key="email_bcc",
         placeholder="",
         help="Opcional. Separe múltiplos e-mails por ponto e vírgula."
     )
     st.sidebar.text_input(
         "Prefixo do assunto",
+        value=str(st.session_state.get("email_subject_prefix", "[SVC] Relatório de Auditoria")),
         key="email_subject_prefix",
         help="Ex.: [SVC] Relatório de Auditoria"
     )
     st.sidebar.text_input(
         "Nome do remetente",
+        value=str(st.session_state.get("email_sender_name", "SVC Inspeção de Molas")),
         key="email_sender_name",
         help="Nome exibido no e-mail. Ex.: SVC Inspeção de Molas"
     )
     st.sidebar.text_input(
         "SMTP server",
+        value=str(st.session_state.get("smtp_server", "smtp.office365.com")),
         key="smtp_server",
         help="Ex.: smtp.office365.com"
     )
@@ -2893,37 +3622,63 @@ if is_eng:
         min_value=1,
         max_value=65535,
         step=1,
+        value=int(st.session_state.get("smtp_port", 587)),
         key="smtp_port"
     )
     st.sidebar.text_input(
         "SMTP user",
+        value=str(st.session_state.get("smtp_user", "")),
         key="smtp_user",
         help="Conta de envio. A senha/token deve ficar fora do código, em arquivo local protegido ou variável de ambiente."
     )
+    st.sidebar.text_input(
+        "SMTP password",
+        value=str(st.session_state.get("smtp_password", "")),
+        key="smtp_password",
+        type="password",
+        help="Senha de app/token SMTP. Será salva apenas no arquivo local de configuração."
+    )
     st.sidebar.checkbox(
         "Usar TLS",
+        value=bool(st.session_state.get("smtp_use_tls", True)),
         key="smtp_use_tls"
     )
+
+    _email_autosaved = persist_email_settings_if_needed(force=False)
 
     c_mail1, c_mail2 = st.sidebar.columns(2)
     with c_mail1:
         if st.button("💾 Salvar e-mail", key="btn_save_email_cfg", use_container_width=True):
             try:
-                save_email_config(collect_email_config_from_session())
+                persist_email_settings_if_needed(force=True)
                 st.sidebar.success("Configuração de e-mail salva ✅")
             except Exception as e:
                 st.sidebar.error(f"Falha ao salvar config de e-mail: {e}")
     with c_mail2:
         if st.button("🔄 Recarregar", key="btn_reload_email_cfg", use_container_width=True):
             try:
-                apply_email_config_to_session(load_email_config())
-                st.sidebar.success("Configuração recarregada ✅")
+                st.session_state["email_config_reload_pending"] = True
                 st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Falha ao recarregar config de e-mail: {e}")
 
+    if st.session_state.get("email_config_reload_notice"):
+        st.sidebar.success(st.session_state.get("email_config_reload_notice"))
+        st.session_state["email_config_reload_notice"] = ""
+    if _email_autosaved:
+        st.sidebar.caption("Dados de e-mail salvos automaticamente nos JSONs locais.")
+    elif st.session_state.get("email_bootstrap_ok", False):
+        st.sidebar.caption("Configuração carregada automaticamente dos JSONs locais.")
+    if st.session_state.get("email_last_save_error"):
+        st.sidebar.warning(f"Falha ao salvar e-mail automaticamente: {st.session_state.get('email_last_save_error')}")
+        st.session_state["email_last_save_error"] = ""
     st.sidebar.caption(email_status_summary())
-    st.sidebar.caption("Obs.: nesta etapa foram adicionados os campos de cadastro/configuração. O disparo SMTP real pode ser ligado na próxima rodada sem perder os recursos já existentes.")
+    hist_name = AUTO_REPORT_HISTORY_PATH.name if AUTO_REPORT_HISTORY_PATH.exists() else "historico_envio_relatorios.json"
+    st.sidebar.caption(f"Histórico: {hist_name}")
+    st.sidebar.caption(f"Auto envio ativo: {bool(st.session_state.get('auto_reports_enabled', False))}")
+    if st.session_state.get("auto_reports_cfg_loaded", False):
+        st.sidebar.caption("Configuração carregada automaticamente dos JSONs locais.")
+    st.sidebar.caption(f"Arquivos locais: {EMAIL_CONFIG_PATH.name} | {EMAIL_CONTACTS_PATH.name}")
 
 # ==========================================================
 # PRELOAD DO MODELO (NÃO mexe em câmera; evita sensor inferir sem modelo)
@@ -2962,6 +3717,8 @@ st.sidebar.caption(f"Último Inspection ID: {st.session_state.get('last_inspecti
 st.sidebar.caption(f"Status integração: {st.session_state.get('last_mes_status', 'LOCAL')}")
 last_xml_name = Path(st.session_state.get('last_xml_path', '')).name if st.session_state.get('last_xml_path', '') else '---'
 st.sidebar.caption(f"Último XML: {last_xml_name}")
+if st.session_state.get("auto_reports_status_msg"):
+    st.sidebar.caption(f"Auto-relatórios: {st.session_state.get('auto_reports_status_msg')}")
 
 if st.sidebar.button("🔄 Reset Produção", use_container_width=True):
     st.session_state["cnt_total"] = 0
@@ -3125,6 +3882,59 @@ if is_eng:
 
             except Exception as e:
                 st.error(f"Falha ao gerar split: {e}")
+
+# ==========================================================
+# SIDEBAR — SIMULAÇÃO POR UPLOAD (ENG)
+# ==========================================================
+if is_eng:
+    st.sidebar.divider()
+    st.sidebar.header("🖼️ Simulação por Upload")
+    st.sidebar.caption("Use fotos do dataset ou imagens já capturadas para testar o SVC sem câmera/sensor.")
+
+    uploaded_test_file = st.sidebar.file_uploader(
+        "Enviar foto do produto",
+        type=["jpg", "jpeg", "png", "bmp"],
+        key="eng_upload_test_file",
+        help="A imagem enviada será usada como entrada offline para a mesma lógica DUAL do SVC."
+    )
+
+    st.session_state["upload_test_count_kpi"] = st.sidebar.checkbox(
+        "Contabilizar upload nos KPIs",
+        value=bool(st.session_state.get("upload_test_count_kpi", False)),
+        help="Deixe desligado para testes de laboratório sem impactar os contadores de produção."
+    )
+
+    if uploaded_test_file is not None:
+        try:
+            preview_bgr = decode_uploaded_image_to_bgr(uploaded_test_file)
+            st.session_state["upload_test_frame"] = preview_bgr.copy()
+            st.session_state["upload_test_name"] = str(uploaded_test_file.name)
+            st.sidebar.caption(f"Arquivo atual: {uploaded_test_file.name}")
+            st.sidebar.image(cv2.cvtColor(preview_bgr, cv2.COLOR_BGR2RGB), width=240, caption="Preview do upload")
+        except Exception as e:
+            st.sidebar.error(f"Falha ao abrir imagem enviada: {e}")
+
+    c_up1, c_up2 = st.sidebar.columns(2)
+    with c_up1:
+        if st.sidebar.button("🧪 Inspecionar upload", width='stretch'):
+            if uploaded_test_file is None:
+                st.sidebar.warning("Envie uma imagem primeiro.")
+            else:
+                try:
+                    src_upload = decode_uploaded_image_to_bgr(uploaded_test_file)
+                    run_infer_dual_on_uploaded_frame(
+                        src_upload,
+                        file_name=str(uploaded_test_file.name),
+                        update_metrics=bool(st.session_state.get("upload_test_count_kpi", False)),
+                    )
+                    st.rerun()
+                except Exception as e:
+                    st.sidebar.error(f"Falha na inspeção por upload: {e}")
+    with c_up2:
+        if st.sidebar.button("🧹 Limpar upload", width='stretch'):
+            st.session_state["upload_test_frame"] = None
+            st.session_state["upload_test_name"] = ""
+            st.rerun()
 
 # ==========================================================
 # SIDEBAR — EVIDÊNCIAS / RETENÇÃO (ENG)
@@ -4038,8 +4848,12 @@ elif st.session_state.get("camera_on") and st.session_state.get("cap") is not No
 # fallback
 else:
     st.session_state["live_frame"] = None
-    lf = st.session_state.get("last_frame")
-    frame = lf.copy() if lf is not None else None
+    upload_frame = st.session_state.get("upload_test_frame")
+    if upload_frame is not None:
+        frame = upload_frame.copy()
+    else:
+        lf = st.session_state.get("last_frame")
+        frame = lf.copy() if lf is not None else None
 
 # Assinatura do frame atual (para detectar troca de peça mesmo se PRESENT não voltar a 0)
 if frame is not None:
@@ -4089,8 +4903,11 @@ with colA:
     with st.container(border=True):
         st.markdown("#### Visualização")
         if frame is None:
-            st.warning("Sem frame (ligue a câmera).")
+            st.warning("Sem frame (ligue a câmera ou envie uma imagem no modo Engenharia).")
         else:
+            upload_name = str(st.session_state.get("upload_test_name", "")).strip()
+            if upload_name and not st.session_state.get("camera_on", False):
+                st.caption(f"Imagem de teste carregada: {upload_name}")
             st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=800)
 
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
@@ -4267,9 +5084,31 @@ with colB:
         if len(st.session_state.get("history", [])) > 1:
             with st.expander("📈 Qualidade (Gráficos)", expanded=False):
                 import pandas as pd
-                df = pd.DataFrame(st.session_state["history"])
+                df = pd.DataFrame(st.session_state.get("history", []))
+
+                # Compatibilidade com históricos antigos ou entradas vindas do upload.
+                # Garante que o painel não quebre se alguma linha não tiver a chave
+                # "aprovado" ou "n" no formato esperado.
+                if "aprovado" not in df.columns:
+                    if "result" in df.columns:
+                        df["aprovado"] = df["result"].astype(str).str.upper().eq("OK").astype(int)
+                    elif "defect_type" in df.columns:
+                        df["aprovado"] = df["defect_type"].astype(str).str.upper().eq("OK").astype(int)
+                    else:
+                        df["aprovado"] = 0
+                else:
+                    df["aprovado"] = pd.to_numeric(df["aprovado"], errors="coerce").fillna(0).astype(int)
+
+                if "n" not in df.columns:
+                    df["n"] = range(1, len(df) + 1)
+                else:
+                    df["n"] = pd.to_numeric(df["n"], errors="coerce")
+                    if df["n"].isna().any():
+                        df["n"] = range(1, len(df) + 1)
+                    df["n"] = df["n"].astype(int)
+
                 df["ok_cum"] = df["aprovado"].cumsum()
-                df["yield_cum"] = 100.0 * df["ok_cum"] / df["n"]
+                df["yield_cum"] = 100.0 * df["ok_cum"] / df["n"].clip(lower=1)
 
                 st.caption("Tendência de Yield (%)")
                 st.line_chart(df.set_index("n")[["yield_cum"]])
@@ -4305,6 +5144,12 @@ with colB:
                 try:
                     pdf_path, html_path = generate_audit_report_files()
                     st.success(f"Relatório gerado com sucesso: {pdf_path.name}")
+                    if bool(st.session_state.get("email_reports_enabled", False)) and bool(st.session_state.get("email_send_on_generate", False)):
+                        ok_email, msg_email = send_report_email(pdf_path, html_path)
+                        if ok_email:
+                            st.success(f"📧 {msg_email}")
+                        else:
+                            st.error(f"Falha ao enviar relatório por e-mail: {msg_email}")
                 except Exception as e:
                     st.error(f"Falha ao gerar relatório: {e}")
         with info_col:
@@ -4314,7 +5159,7 @@ with colB:
         last_pdf = st.session_state.get("last_report_pdf", "")
         last_html = st.session_state.get("last_report_html", "")
         if last_pdf and Path(last_pdf).exists():
-            d1, d2 = st.columns(2)
+            d1, d2, d3 = st.columns(3)
             with d1:
                 with open(last_pdf, "rb") as fpdf:
                     st.download_button(
@@ -4325,8 +5170,8 @@ with colB:
                         use_container_width=True,
                         key="download_pdf_report",
                     )
-            if last_html and Path(last_html).exists():
-                with d2:
+            with d2:
+                if last_html and Path(last_html).exists():
                     with open(last_html, "rb") as fhtml:
                         st.download_button(
                             "⬇️ Baixar HTML resumo",
@@ -4336,6 +5181,16 @@ with colB:
                             use_container_width=True,
                             key="download_html_report",
                         )
+        ####with d3:############################ Retirada do botão Enviar relatório por e-mail 
+        #       if st.button("📧 Enviar relatório por e-mail", key="btn_send_report_email", use_container_width=True):
+        #           try:
+        #               ok_email, msg_email = send_report_email(last_pdf, last_html)
+        #               if ok_email:
+        #                   st.success(msg_email)
+        #               else:
+        #                   st.error(f"Falha ao enviar relatório por e-mail: {msg_email}")
+        #           except Exception as e:
+        #               st.error(f"Falha ao enviar relatório por e-mail: {e}")
 
     except Exception as e:
         st.error(f"Erro ao renderizar painel direito: {e}")
@@ -4405,3 +5260,72 @@ if _ss.get("serial_on", False) and _ss.get("sensor_job_pending", False) and not 
             _ss["capture_busy"] = False
             _ss["capture_busy_since"] = 0.0
 
+
+# ==========================================================
+# ANDON - Alerta automático de Yield baixo (não altera lógica existente)
+# ==========================================================
+def check_andon_alert():
+    try:
+        total = int(st.session_state.get("cnt_total", 0))
+        ok = int(st.session_state.get("cnt_ok", 0))
+
+        if total == 0:
+            return
+
+        yield_pct = (ok / total) * 100.0
+
+        MIN_PRODUCTION = 100
+        YIELD_THRESHOLD = 95.0
+
+        if total >= MIN_PRODUCTION and yield_pct < YIELD_THRESHOLD:
+
+            st.markdown(f"""
+<div class="andon-banner">
+🚨 ANDON ACIONADO — YIELD BAIXO<br>
+Yield atual: {yield_pct:.2f}% | Produção: {total} peças
+</div>
+""", unsafe_allow_html=True)
+
+            st.warning("Verificar processo imediatamente.")
+
+            # ------------------------------------------------
+            # Disparo automático de email (somente uma vez)
+            # ------------------------------------------------
+            if not st.session_state.get("andon_email_sent", False):
+
+                try:
+                    last_pdf = st.session_state.get("last_pdf_report")
+                    last_html = st.session_state.get("last_html_report")
+
+                    # Só envia se existir relatório
+                    if last_pdf and last_html:
+
+                        ok_email, msg_email = send_report_email(last_pdf, last_html)
+
+                        if ok_email:
+                            st.session_state["andon_email_sent"] = True
+                            st.warning("📧 Email de ALERTA ANDON enviado automaticamente.")
+
+                    else:
+                        st.warning("⚠ ANDON acionado, mas relatório ainda não foi gerado.")
+
+                except Exception as e:
+                    st.error(f"Erro ao enviar email ANDON: {e}")
+
+        # ------------------------------------------------
+        # Reset automático quando processo normaliza
+        # ------------------------------------------------
+        elif yield_pct >= YIELD_THRESHOLD:
+            st.session_state["andon_email_sent"] = False
+
+    except Exception:
+        pass
+
+
+# ==========================================================
+# CHAMADA DO ANDON (não interfere em outras funções)
+# ==========================================================
+try:
+    check_andon_alert()
+except Exception:
+    pass

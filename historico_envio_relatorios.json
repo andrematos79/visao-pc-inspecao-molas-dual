@@ -1,0 +1,19 @@
+{
+  "_comentario_geral": "ARQUIVO DE CONTROLE INTERNO PARA EVITAR ENVIO DUPLICADO. O APP DEVERA ATUALIZAR ESTE ARQUIVO AUTOMATICAMENTE. So mexa aqui se souber exatamente o que esta fazendo.",
+  "ultimo_envio": {
+    "turno_1": null,
+    "_comentario_turno_1": "Exemplo de valor: 2026-03-29",
+    "turno_2": null,
+    "_comentario_turno_2": "Exemplo de valor: 2026-03-29",
+    "turno_3": null,
+    "_comentario_turno_3": "Exemplo de valor: 2026-03-29",
+    "daily": null,
+    "_comentario_daily": "Exemplo de valor: 2026-03-29",
+    "weekly": null,
+    "_comentario_weekly": "Exemplo de valor: 2026-W13",
+    "monthly": null,
+    "_comentario_monthly": "Exemplo de valor: 2026-03"
+  },
+  "ultima_atualizacao": null,
+  "_comentario_ultima_atualizacao": "Exemplo: 2026-03-29 22:00:00"
+}
