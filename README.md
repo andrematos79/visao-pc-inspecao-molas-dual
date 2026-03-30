@@ -6,6 +6,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Release](https://img.shields.io/badge/version-v1.0.1--industrial-blue)
 
+**Latest version:** **SVC v1.1.0 – Industrial ROI calibration and temporal inference smoothing**
 **Latest version DOI:** https://doi.org/10.5281/zenodo.19323586  
 **Concept DOI (all versions):** https://doi.org/10.5281/zenodo.19207170
 
@@ -21,7 +22,7 @@ The system uses **deep learning, industrial triggering mechanisms, and a dual‑
 • Misaligned springs  
 • Correct assembly conditions  
 
-The system evolved from a **laboratory prototype to an industrial‑ready solution (v1.0.1)** validated in a real manufacturing environment.
+The system evolved from a **laboratory prototype to an industrial-ready solution (v1.1.0)** validated and calibrated under real manufacturing conditions.
 
 This work was developed within the **Professional Master's Program in Electrical Engineering (PPGEEL)** at the **Universidade do Estado do Amazonas (UEA)**, focusing on **Embedded Systems and Computer Vision for Smart Manufacturing applications**.
 

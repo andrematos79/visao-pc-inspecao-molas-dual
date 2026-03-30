@@ -3452,9 +3452,9 @@ with st.sidebar:
     
     with st.expander("ℹ️ Sobre o Sistema", expanded=False):
         st.markdown("### Sistema: SVC – Computer Vision System for Spring Inspection")
-        st.markdown("- **Versão:** v1.0.1")
-        st.markdown("- **Status:** Industrial Ready Version")
-        st.markdown("- **Release:** 28/03/2026")
+        st.markdown("- **Versão:** v1.1.0")
+        st.markdown("- **Status:** Industrial ROI Calibration")
+        st.markdown("- **Release:** 30/03/2026")
         st.markdown("- **Empresa:** Salcomp")
         st.markdown("- **Engenheiro Responsável:** André Gama de Matos")
         st.markdown("- **Orientador Acadêmico:** Prof. Dr. Carlos Maurício Seródio Figueiredo")
