@@ -1,5 +1,9 @@
 # SVC – Computer Vision System for Spring Inspection
 
+<p align="center">
+  <img src="assets/logo_sistema.png" width="450">
+</p>
+
 Industrial AI-based computer vision platform for automated detection of metallic spring defects in mobile phone chargers.
 
 **Inspection Mode:** DUAL ROI Inspection
