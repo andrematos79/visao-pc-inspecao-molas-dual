@@ -1,5 +1,8 @@
+# SVC – Computer Vision System for Spring Inspection
 
-# SVC — Computer Vision System for Automated Spring Inspection
+Industrial AI-based computer vision platform for automated detection of metallic spring defects in mobile phone chargers.
+
+**Inspection Mode:** DUAL ROI Inspection
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19323586.svg)](https://doi.org/10.5281/zenodo.19323586)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
@@ -14,7 +17,7 @@
 
 # Overview
 
-**SVC (Spring Vision Control)** is a low‑cost industrial computer vision system designed for **automated inspection of metallic springs installed inside mobile phone chargers**.
+**SVC (Computer Vision System for Spring Inspection)** is a low-cost industrial computer vision platform designed for **automated inspection of metallic springs installed inside mobile phone chargers**.
 
 The system uses **deep learning, industrial triggering mechanisms, and a dual‑ROI inspection strategy** to detect:
 
@@ -24,7 +27,8 @@ The system uses **deep learning, industrial triggering mechanisms, and a dual‑
 
 The system evolved from a **laboratory prototype to an industrial-ready solution (v1.1.0)** validated and calibrated under real manufacturing conditions.
 
-This work was developed within the **Professional Master's Program in Electrical Engineering (PPGEEL)** at the **Universidade do Estado do Amazonas (UEA)**, focusing on **Embedded Systems and Computer Vision for Smart Manufacturing applications**.
+Developed by André Gama de Matos within the context of the Professional Master’s Program in Electrical Engineering at Amazonas State University (UEA)
+© 2026 André Gama de Matos
 
 ---
 

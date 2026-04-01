@@ -2872,7 +2872,7 @@ def generate_audit_report_files() -> tuple[Path, Path]:
             fig.text(0.07, y, txt, fontsize=size, fontweight=weight, color=color, va='top', ha='left')
             y -= step
 
-        line('SVC Inspeção de Molas — DUAL', size=18, weight='bold', step=0.035)
+        line('SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode', size=18, weight='bold', step=0.035)
         line('Relatório de Auditoria', size=14, weight='bold', step=0.032)
         line(f"Emitido em: {snapshot['generated_at']}", size=10)
         line(f"Período: {snapshot['period_start']} até {snapshot['generated_at']}", size=10)
@@ -2917,7 +2917,7 @@ def generate_audit_report_files() -> tuple[Path, Path]:
                 ax = fig.add_axes([0.06, 0.08, 0.88, 0.84])
                 ax.imshow(img)
                 ax.axis('off')
-                fig.text(0.07, 0.96, 'SVC Inspeção de Molas — DUAL', fontsize=16, fontweight='bold', va='top')
+                fig.text(0.07, 0.96, 'SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode', fontsize=16, fontweight='bold', va='top')
                 fig.text(0.07, 0.93, 'Relatório de Auditoria — Gráfico', fontsize=12, va='top')
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close(fig)
@@ -3201,10 +3201,10 @@ def check_auto_report_schedule() -> None:
 # ==========================================================
 # STREAMLIT APP
 # ==========================================================
-st.set_page_config(page_title="SVC Inspeção de Molas — DUAL", layout="wide")
+st.set_page_config(page_title="SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode", layout="wide")
 st.markdown("""
 <div class="app-title-fixed">
-    SVC Inspeção de Molas — DUAL
+    SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode
 </div>
 """, unsafe_allow_html=True)
 # ==========================================================
@@ -3435,7 +3435,7 @@ render_production_dashboard()
 # SIDEBAR — LOGO + SOBRE
 # ==========================================================
 ASSETS_DIR = BASE_DIR / "assets"
-LOGO_PATH = ASSETS_DIR / "logo_empresa.jpg"
+LOGO_PATH = ASSETS_DIR / "logo_sistema.png"
 
 with st.sidebar:
     if LOGO_PATH.exists():
@@ -3445,7 +3445,7 @@ with st.sidebar:
             # evita quebra por MediaFileStorageError em reruns rápidos
             st.caption("⚠️ Falha ao renderizar logo (streamlit media cache).")
     else:
-        st.caption("⚠️ Logo não encontrado em assets/logo_empresa.jpg")
+        st.caption("⚠️ Logo não encontrado em assets/logo_sistema.png")
 
     st.markdown("---")
 
@@ -3463,7 +3463,7 @@ with st.sidebar:
         st.markdown("- **Ênfase:** Sistemas Embarcados e Visão Computacional")
         st.markdown("- **Instituição:** Universidade do Estado do Amazonas – UEA")
         st.markdown("- **Unidade:** Escola Superior de Tecnologia – EST")
-        st.markdown("**Desenvolvido nos Laboratórios de Sistemas Embarcados e Visão Computacional da Escola Superior de Tecnologia – UEA**")
+        st.markdown("**Desenvolvido por André Gama de Matos no contexto do Mestrado Profissional em Engenharia Elétrica da Universidade do Estado do Amazonas.**")
         st.markdown("---")
         st.markdown("**Ambiente de Execução do Sistema**")
         st.markdown(f"- **Sistema Operacional:** {platform.system()} {platform.release()}")
