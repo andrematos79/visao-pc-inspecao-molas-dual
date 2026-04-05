@@ -1,8 +1,0 @@
-Classes:
-['NG_CORPO_ESTRANHO', 'NG_DANIFICADO', 'NG_DESALINHADO', 'OK']
-
-Confusion Matrix:
-[[14  1  0  1]
- [ 5 10  0  1]
- [ 0  0 15  0]
- [ 0  1  0 19]]
