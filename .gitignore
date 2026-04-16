@@ -1,33 +1,7 @@
-# Ambiente virtual
-.venv_svc/
-venv/
-.env
-
-# Datasets
-dataset/
+﻿.venv_svc/
 dataset_auto_evidencias/
-dataset_coleta/
 dataset_coleta_industrial/
-dataset_mola_roi_raw/
-dataset_mola_roi_split/
-dataset_products/
-
-# Logs e experimentos
 logs/
-experiments/
-
-# Relatórios gerados
 reports/
-
-# Pastas locais
-Disco Local/
-
-# Sistema
-.DS_Store
-Thumbs.db
-
-# Modelos gigantes de treino
-*.h5
-*.ckpt
-*.pb
-*.onnx
+__pycache__/
+*.pyc

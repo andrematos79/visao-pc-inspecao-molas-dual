@@ -525,15 +525,18 @@ def ss_init():
     if "serial_last_present" not in ss: ss.serial_last_present = None
     if "serial_last_trigger_ts" not in ss: ss.serial_last_trigger_ts = 0.0
     if "serial_status" not in ss: ss.serial_status = "OFF"
+    if "serial_autorefresh" not in ss: ss.serial_autorefresh = True
 
     if "serial_prev_present" not in ss: ss.serial_prev_present = None
     if "serial_lockout_until" not in ss: ss.serial_lockout_until = 0.0
     # ---- Serial trigger tuning
-    if "serial_trigger_mode" not in ss: ss.serial_trigger_mode = "stable_high"  # default robusto
-    if "serial_stable_ms" not in ss: ss.serial_stable_ms = 220
-    if "serial_debounce_s" not in ss: ss.serial_debounce_s = 0.6
-    if "serial_lockout_s" not in ss: ss.serial_lockout_s = 1.2
+    if "serial_trigger_mode" not in ss: ss.serial_trigger_mode = "stable_high"  # default mais estável para linha
+    if "serial_stable_ms" not in ss: ss.serial_stable_ms = 60
+    if "serial_debounce_s" not in ss: ss.serial_debounce_s = 0.15
+    if "serial_lockout_s" not in ss: ss.serial_lockout_s = 0.35
     if "serial_high_since" not in ss: ss.serial_high_since = 0.0
+    if "serial_low_since" not in ss: ss.serial_low_since = 0.0
+    if "serial_rearm_ms" not in ss: ss.serial_rearm_ms = 180
     if "serial_cycle_fired" not in ss: ss.serial_cycle_fired = False
 
 
@@ -550,9 +553,22 @@ def ss_init():
     if "sensor_job_armed_ts" not in ss: ss.sensor_job_armed_ts = 0.0
     if "sensor_job_ready_at" not in ss: ss.sensor_job_ready_at = 0.0
 
-    if "sensor_settle_ms" not in ss: ss.sensor_settle_ms = 220
+    if "sensor_settle_ms" not in ss: ss.sensor_settle_ms = 200
     if "capture_busy" not in ss: ss.capture_busy = False
     if "capture_busy_since" not in ss: ss.capture_busy_since = 0.0
+    if "sensor_infer_running" not in ss: ss.sensor_infer_running = False
+    if "sensor_to_manual_request" not in ss: ss.sensor_to_manual_request = False
+    if "manual_override_until" not in ss: ss.manual_override_until = 0.0
+    if "sensor_fire_now" not in ss: ss.sensor_fire_now = False
+    if "enable_image_autotrigger" not in ss: ss.enable_image_autotrigger = False
+
+    if "manual_test_request" not in ss: ss.manual_test_request = False
+    if "sensor_force_rerun_once" not in ss: ss.sensor_force_rerun_once = False
+    if "sensor_exec_request" not in ss: ss.sensor_exec_request = False
+    if "sensor_exec_ready_at" not in ss: ss.sensor_exec_ready_at = 0.0
+    if "sensor_edge_frame" not in ss: ss.sensor_edge_frame = None
+    if "sensor_edge_ts" not in ss: ss.sensor_edge_ts = 0.0
+    if "sensor_exec_retry_count" not in ss: ss.sensor_exec_retry_count = 0
 
     # ---- KPI / Yield
     if "kpi_total" not in ss: ss.kpi_total = 0
@@ -567,6 +583,36 @@ def ss_init():
     if "last_warning" not in ss: ss.last_warning = None
 
 ss_init()
+
+def manual_override_active() -> bool:
+    return time.time() < float(st.session_state.get("manual_override_until", 0.0))
+
+def arm_manual_override(window_s: float = 1.2) -> None:
+    st.session_state["manual_override_until"] = time.time() + float(window_s)
+
+def clear_sensor_locks() -> None:
+    st.session_state["pending_trigger"] = False
+    st.session_state["pending_trigger_src"] = None
+    st.session_state["sensor_job_pending"] = False
+    st.session_state["sensor_job_kind"] = None
+    st.session_state["sensor_job_armed_ts"] = 0.0
+    st.session_state["sensor_job_ready_at"] = 0.0
+    st.session_state["capture_busy"] = False
+    st.session_state["capture_busy_since"] = 0.0
+    st.session_state["sensor_infer_running"] = False
+    st.session_state["sensor_to_manual_request"] = False
+    st.session_state["sensor_fire_now"] = False
+    st.session_state["serial_cycle_fired"] = False
+    st.session_state["serial_high_since"] = 0.0
+    st.session_state["serial_low_since"] = 0.0
+    st.session_state["sensor_exec_request"] = False
+    st.session_state["sensor_exec_ready_at"] = 0.0
+    st.session_state["sensor_edge_frame"] = None
+    st.session_state["sensor_edge_ts"] = 0.0
+    st.session_state["sensor_exec_retry_count"] = 0
+    st.session_state["serial_last_present"] = None
+    st.session_state["serial_prev_present"] = None
+    st.session_state["sensor_present"] = False
 
 def list_com_ports():
     ports = []
@@ -645,6 +691,7 @@ def serial_start():
     ss.serial_prev_present = None
     ss.sensor_present = False
     ss.serial_high_since = 0.0
+    ss.serial_low_since = 0.0
     ss.serial_cycle_fired = False
     ss.serial_last_trigger_ts = 0.0
     ss.serial_lockout_until = 0.0
@@ -653,6 +700,10 @@ def serial_start():
     ss.sensor_job_pending = False
     ss.sensor_job_kind = None
     ss.sensor_job_armed_ts = 0.0
+    ss.sensor_fire_now = False
+    ss.sensor_exec_request = False
+    ss.sensor_exec_ready_at = 0.0
+    ss.sensor_infer_running = False
 
     # limpa fila (eventos antigos)
     try:
@@ -714,14 +765,54 @@ def poll_serial_events_and_maybe_trigger():
     # Helper: checa lockout/debounce e arma trigger
     def _arm_trigger():
         nonlocal now
+        if bool(ss.get("sensor_infer_running", False)):
+            return False
         if now < float(ss.get("serial_lockout_until", 0.0)):
             return False
         if (now - float(ss.get("serial_last_trigger_ts", 0.0))) < debounce_s:
             return False
         ss.serial_last_trigger_ts = now
         ss.serial_lockout_until = now + lockout_s
-        ss.pending_trigger = True
-        ss.pending_trigger_src = "sensor"
+
+        settle_s = max(0.35, float(ss.get("sensor_settle_ms", 350)) / 1000.0)
+
+        # Ao mudar o estado do sensor, volta para preview ao vivo.
+        ss["frozen"] = False
+        ss["frozen_frame"] = None
+
+        # Guarda snapshot da borda 0->1 para a inferência usar a imagem
+        # com o cover ainda presente, mesmo se houver pequeno atraso.
+        edge_src = ss.get("live_frame")
+        if edge_src is None:
+            edge_src = ss.get("display_frame")
+        if edge_src is None:
+            edge_src = ss.get("last_frame")
+
+        if isinstance(edge_src, np.ndarray):
+            ss["sensor_edge_frame"] = edge_src.copy()
+            ss["sensor_edge_ts"] = now
+        else:
+            ss["sensor_edge_frame"] = None
+            ss["sensor_edge_ts"] = 0.0
+
+        # Fluxo do sensor: arma uma execução direta no mesmo funil estável do TESTE 1x.
+        # Mesmo com frame de borda disponível, espera um pequeno settle para capturar o frame atual.
+        ss.pending_trigger = False
+        ss.pending_trigger_src = None
+        ss["sensor_fire_now"] = False
+        ss["sensor_exec_request"] = True
+        ss["sensor_exec_ready_at"] = now + settle_s
+        ss["capture_busy"] = False
+        ss["capture_busy_since"] = 0.0
+        ss["sensor_job_pending"] = False
+        ss["sensor_job_kind"] = None
+        ss["sensor_job_armed_ts"] = now
+        ss["sensor_job_ready_at"] = 0.0
+
+        # Força pelo menos mais um rerun rápido depois de armar o job.
+        ss["sensor_force_rerun_once"] = True
+        ss["last_sensor_fire_status"] = "armed(trigger)"
+        ss["last_sensor_fire_error"] = ""
         return True
 
     # 1) Consome tudo que chegou na fila (mudanças de estado / erros)
@@ -748,15 +839,27 @@ def poll_serial_events_and_maybe_trigger():
 
             ss.sensor_present = (present == 1)
 
+            # Sempre que o sensor muda de estado, sai do modo congelado.
             prev = ss.get("serial_prev_present", None)
+            if prev is None or prev != present:
+                ss["frozen"] = False
+                ss["frozen_frame"] = None
+                if (not ss.get("capture_busy", False)) and (not ss.get("sensor_exec_request", False)):
+                    ss["last_sensor_fire_status"] = f"idle(present={present})"
+                    ss["last_sensor_fire_error"] = ""
             ss.serial_prev_present = present
 
             now = time.time()
 
-            # Rearme por ciclo: quando PRESENT volta a 0, libera novo disparo em qualquer modo
+            # Rearme por ciclo com estabilidade em nível baixo:
+            # evitar múltiplos disparos causados por jitter/oscilações do sensor
+            # enquanto a peça ainda está sendo posicionada na base.
             if present == 0:
-                ss.serial_cycle_fired = False
+                if float(ss.get("serial_low_since", 0.0)) <= 0.0:
+                    ss.serial_low_since = now
                 ss.serial_high_since = 0.0
+            else:
+                ss.serial_low_since = 0.0
 
             # MODE: release_1to0 (dispara ao SOLTAR: 1 -> 0)
             if mode == "release_1to0":
@@ -772,10 +875,7 @@ def poll_serial_events_and_maybe_trigger():
                         ss.serial_cycle_fired = True
 
 
-                # ✅ Rearme obrigatório: só permite novo disparo quando PRESENT voltar a 0
-                if present == 0:
-                    ss.serial_cycle_fired = False
-                    ss.serial_high_since = 0.0
+                # Rearme feito apenas após PRESENT=0 estável por alguns ms.
 
             # MODE: stable_high (dispara 1x quando fica em 1 por N ms; rearma ao voltar a 0)
             else:
@@ -784,7 +884,6 @@ def poll_serial_events_and_maybe_trigger():
                     ss.serial_cycle_fired = False
 
                 if present == 0:
-                    ss.serial_cycle_fired = False
                     ss.serial_high_since = 0.0
         elif kind == "error":
             ss.serial_status = f"ERR: {evt[1]}"
@@ -810,6 +909,18 @@ def poll_serial_events_and_maybe_trigger():
             if (now - high_since) >= (stable_ms / 1000.0):
                 if _arm_trigger():
                     ss.serial_cycle_fired = True
+
+    # Rearme one-shot somente depois que o sensor permanecer em 0 por um curto período.
+    # Isso evita re-disparos em cascata durante a inserção/remoção da mesma peça.
+    if (not bool(ss.get("sensor_present", False))) and bool(ss.get("serial_cycle_fired", False)):
+        low_since = float(ss.get("serial_low_since", 0.0))
+        rearm_ms = int(ss.get("serial_rearm_ms", 180))
+        if low_since > 0.0 and (time.time() - low_since) >= (rearm_ms / 1000.0):
+            ss.serial_cycle_fired = False
+            ss.serial_low_since = 0.0
+            if (not ss.get("sensor_exec_request", False)) and (not ss.get("sensor_infer_running", False)):
+                ss["last_sensor_fire_status"] = "idle(present=0)"
+                ss["last_sensor_fire_error"] = ""
 
 
 def init_session():
@@ -839,6 +950,8 @@ def init_session():
     st.session_state.setdefault("last_infer_sig", None)
     st.session_state.setdefault("last_infer_ts", 0.0)
     st.session_state.setdefault("live_sig", None)
+    st.session_state.setdefault("sensor_infer_running", False)
+    st.session_state.setdefault("sensor_to_manual_request", False)
     # ajustes do trigger por imagem
     st.session_state.setdefault("serial_min_interval_s", 0.8)
     st.session_state.setdefault("serial_image_diff_thr", 6.0)
@@ -1751,8 +1864,8 @@ def read_one_frame(cap: cv2.VideoCapture):
 
 def read_fresh_frame(
     cap: cv2.VideoCapture,
-    flush_grabs: int = 6,
-    sleep_ms: int = 15,
+    flush_grabs: int = 2,
+    sleep_ms: int = 0,
     extra_reads: int = 0,
 ):
     if cap is None or not cap.isOpened():
@@ -1775,7 +1888,7 @@ def read_fresh_frame(
     return frame
 
 
-def read_one_frame_timeout(cap, timeout_s: float = 1.5):
+def read_one_frame_timeout(cap, timeout_s: float = 0.5):
     """Lê 1 frame com timeout para evitar travar a UI (drivers podem bloquear em cap.read)."""
     out = {"ok": False, "frame": None, "err": None}
 
@@ -2454,6 +2567,9 @@ def run_infer_dual_on_uploaded_frame(frame_bgr: np.ndarray, file_name: str = "up
     src = frame_bgr.copy()
     st.session_state["display_frame"] = src.copy()
     st.session_state["last_frame"] = src.copy()
+    if trigger_source in ("sensor", "manual_test"):
+        st.session_state["frozen_frame"] = src.copy()
+        st.session_state["frozen"] = True
     st.session_state["upload_test_frame"] = src.copy()
     st.session_state["upload_test_name"] = str(file_name or "upload")
     st.session_state["last_infer_sig"] = quick_frame_signature(src)
@@ -3223,36 +3339,60 @@ with st.sidebar:
     if str(st.session_state.get("serial_status","")).startswith("ERR:"):
         st.error("Falha ao abrir a porta serial. Feche o Serial Monitor/IDE, verifique a COM correta e tente novamente.")
 
-# WATCHDOG: evita travamento eterno
+# WATCHDOG: evita travamento eterno, mas sem matar inferência normal do sensor.
+# Em produção, a captura + inferência + renderização pode levar mais que 2 s.
+# Se o timeout for curto demais, o watchdog limpa o estado no meio do processo,
+# deixando "last_sensor_fire" preso em firing e "Último PRESENT" como None.
+WATCHDOG_TIMEOUT_S = 20.0
 if st.session_state.get("capture_busy", False):
     t0 = float(st.session_state.get("capture_busy_since", 0.0))
 
     if t0 <= 0:
         st.session_state["capture_busy_since"] = time.time()
 
-    elif (time.time() - t0) > 5.0:
-        # libera captura
+    elif (time.time() - t0) > WATCHDOG_TIMEOUT_S:
+        # libera captura somente se realmente excedeu um tempo anormal
         st.session_state["capture_busy"] = False
         st.session_state["capture_busy_since"] = 0.0
 
-        # ✅ limpa estados do sensor também
+        # limpa estados do job atual, mas preserva o último estado do sensor
         st.session_state["sensor_job_pending"] = False
+        st.session_state["sensor_job_kind"] = None
         st.session_state["pending_trigger"] = False
+        st.session_state["pending_trigger_src"] = None
+        st.session_state["sensor_fire_now"] = False
+        st.session_state["sensor_exec_request"] = False
+        st.session_state["sensor_exec_ready_at"] = 0.0
+        st.session_state["sensor_force_rerun_once"] = False
+        st.session_state["sensor_infer_running"] = False
+        st.session_state["last_sensor_fire_status"] = "watchdog_reset"
+        st.session_state["last_sensor_fire_error"] = f"Timeout > {WATCHDOG_TIMEOUT_S:.1f}s"
 
 else:
     st.session_state["capture_busy_since"] = 0.0
 
 # Auto-refresh leve (somente se Serial ON e pacote disponível)
-if ((st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True)) or st.session_state.get("auto_reports_enabled", False)) and HAS_AUTOREFRESH:
-    # Mantém o app "respirando" SEMPRE, inclusive se capture_busy travar.
-    # Assim o watchdog e o poll do serial continuam rodando.
-    if st.session_state.get("capture_busy", False):
-        interval = 1800  # (industrial) evita corrida de mídia durante inferência
+# Mantém o consumo da serial vivo também durante o fluxo do sensor.
+if (
+    ((st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True)) or st.session_state.get("auto_reports_enabled", False))
+    and HAS_AUTOREFRESH
+    and (not st.session_state.get("manual_test_request", False))
+):
+    if st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True):
+        # IMPORTANTE: não agendar auto-rerun enquanto uma captura/inferência estiver em andamento.
+        # O rerun automático pode interromper o fluxo do sensor no meio do processamento e deixar
+        # o estado preso em "firing...(sensor)" com capture_busy=True.
+        if st.session_state.get("capture_busy", False):
+            interval = 350 if st.session_state.get("sensor_infer_running", False) else None
+        elif st.session_state.get("sensor_exec_request", False) or st.session_state.get("sensor_job_pending", False) or st.session_state.get("pending_trigger", False):
+            interval = 350
+        else:
+            interval = 600
     else:
-        interval = 2200 if st.session_state.get("sensor_job_pending", False) else 3000
+        interval = 30000
 
-# Auto-refresh leve (desativado para evitar reset de contadores)
-# st_autorefresh(interval=interval, key="serial_autorefresh_key")
+    if interval is not None:
+        st_autorefresh(interval=interval, key="serial_autorefresh_key")
 
 import time
 
@@ -3267,19 +3407,46 @@ poll_serial_events_and_maybe_trigger()
 check_auto_report_schedule()
 
 # ==========================================================
+# DISPARO DIRETO DO SENSOR (0->1 / teste) -> mesmo funil do botão
+# ==========================================================
+if False and (
+    st.session_state.get("sensor_fire_now", False)
+    and (not manual_override_active())
+    and (not st.session_state.get("capture_busy", False))
+):
+    st.session_state["sensor_fire_now"] = False
+    st.session_state["pending_trigger"] = False
+    st.session_state["pending_trigger_src"] = None
+    st.session_state["sensor_job_pending"] = False
+    st.session_state["sensor_job_kind"] = None
+    st.session_state["sensor_job_armed_ts"] = 0.0
+    st.session_state["sensor_job_ready_at"] = 0.0
+    st.session_state["capture_busy"] = True
+    st.session_state["capture_busy_since"] = time.time()
+    st.session_state["last_sensor_fire_status"] = "firing..."
+    st.session_state["last_sensor_fire_error"] = ""
+    try:
+        run_capture_infer_dual(trigger_source="sensor")
+        if st.session_state.get("last_result") is None:
+            err = st.session_state.get("last_error") or "Inferência não gerou resultado."
+            st.session_state["last_sensor_fire_status"] = "ERR"
+            st.session_state["last_sensor_fire_error"] = str(err)
+        else:
+            st.session_state["last_sensor_fire_status"] = "OK (infer done)"
+            st.session_state["last_sensor_fire_error"] = ""
+    except Exception as e:
+        st.session_state["last_sensor_fire_status"] = "ERR"
+        st.session_state["last_sensor_fire_error"] = str(e)
+        st.session_state["last_error"] = f"Erro na inferência: {e}"
+    finally:
+        st.session_state["capture_busy"] = False
+        st.session_state["capture_busy_since"] = 0.0
+
+# ==========================================================
 # PONTE: pending_trigger (Serial) -> sensor_job_pending (job)
 # ==========================================================
 ss = st.session_state
-if ss.get("pending_trigger", False) and not ss.get("sensor_job_pending", False):
-    # arma UM job de inspeção (sem travar UI)
-    now = time.time()
-    settle_ms = int(ss.get("sensor_settle_ms", 220))
-    ss["sensor_job_pending"] = True
-    ss["sensor_job_kind"] = "sensor"
-    ss["sensor_job_armed_ts"] = now
-    ss["sensor_job_ready_at"] = now + (settle_ms / 1000.0)
-    ss["pending_trigger"] = False
-    ss["pending_trigger_src"] = None
+# Fluxo legado de ponte desativado: o sensor real agora usa sensor_exec_request.
 
 # ==========================================================
 # CSS
@@ -3533,29 +3700,36 @@ with st.sidebar:
             st.caption(f"ready_at - now: {st.session_state.get('sensor_job_ready_at', 0.0) - now_dbg:.3f}s")
 
             st.divider()
-            if st.button("TESTE: Disparar 1x (simula sensor)", width="stretch"):
-                _now = time.time()
-                st.session_state["sensor_job_pending"] = True
-                st.session_state["sensor_job_kind"] = "sensor"
-                st.session_state["sensor_job_armed_ts"] = _now
-                st.session_state["sensor_job_ready_at"] = _now + (float(st.session_state.get("sensor_settle_ms", 220)) / 1000.0)
-                st.session_state["last_sensor_fire_status"] = "arming...(manual test)"
-                st.session_state["last_sensor_fire_error"] = ""
 
-                st.session_state["serial_trigger_mode"] = st.selectbox(
+            st.session_state["serial_trigger_mode"] = st.selectbox(
                 "Modo de disparo",
                 options=["stable_high", "press_0to1", "release_1to0"],
                 index=["stable_high", "press_0to1", "release_1to0"].index(
-                    st.session_state.get("serial_trigger_mode", "press_0to1")
+                    st.session_state.get("serial_trigger_mode", "stable_high")
                 ),
                 help="stable_high dispara 1x quando PRESENT=1 fica estável por N ms e rearma quando volta a 0.",
             )
 
-            if st.button("RESET SENSOR STATE ⚠",type="primary", width="stretch"):
-                st.session_state["sensor_job_pending"] = False
+            if st.button("TESTE: Disparar 1x (simula sensor)", width="stretch"):
+                clear_sensor_locks()
+                st.session_state["sensor_fire_now"] = False
                 st.session_state["pending_trigger"] = False
-                st.session_state["capture_busy"] = False
-                st.session_state["capture_busy_since"] = 0.0
+                st.session_state["pending_trigger_src"] = "manual_test"
+                st.session_state["last_error"] = None
+                st.session_state["last_warning"] = None
+                st.session_state["last_sensor_fire_error"] = ""
+                st.session_state["last_sensor_fire_ts"] = time.time()
+                st.session_state["manual_test_request"] = True
+                st.session_state["last_sensor_fire_status"] = "armed(manual test)"
+                st.rerun()
+
+            if st.button("RESET SENSOR STATE ⚠",type="primary", width="stretch"):
+                clear_sensor_locks()
+                st.session_state["serial_last_present"] = None
+                st.session_state["serial_prev_present"] = None
+                st.session_state["sensor_present"] = False
+                st.session_state["last_sensor_fire_status"] = "reset"
+                st.session_state["last_sensor_fire_error"] = ""
                 st.rerun()
 
 
@@ -4589,7 +4763,30 @@ def update_metrics_and_history(res: dict) -> None:
 def execute_sensor_job_if_ready():
     ss = st.session_state
 
+    # Segurança: se por algum motivo o job ficou pendente mas a câmera não gerou
+    # live_frame no mesmo ciclo, tenta capturar um snapshot mínimo antes de desistir.
+    if ss.get("sensor_job_pending", False) and ss.get("sensor_job_kind") == "sensor":
+        if not isinstance(ss.get("sensor_edge_frame"), np.ndarray):
+            edge_src = ss.get("live_frame")
+            if edge_src is None:
+                edge_src = ss.get("display_frame")
+            if edge_src is None:
+                edge_src = ss.get("last_frame")
+            if isinstance(edge_src, np.ndarray):
+                ss["sensor_edge_frame"] = edge_src.copy()
+                ss["sensor_edge_ts"] = time.time()
+                if float(ss.get("sensor_job_ready_at", 0.0)) <= 0.0:
+                    ss["sensor_job_ready_at"] = time.time()
+
     if not ss.get("sensor_job_pending", False):
+        return
+
+    job_kind = str(ss.get("sensor_job_kind") or "sensor")
+
+    if (job_kind != "manual_test") and (not ss.get("serial_on", False)):
+        return
+
+    if manual_override_active():
         return
 
     if ss.get("capture_busy", False):
@@ -4599,20 +4796,29 @@ def execute_sensor_job_if_ready():
     ready_at = float(ss.get("sensor_job_ready_at", 0.0))
 
     if now < ready_at:
+        ss["last_sensor_fire_status"] = "arming..."
+        ss["last_sensor_fire_error"] = ""
         return
 
     # 🔒 trava captura
     ss["capture_busy"] = True
     ss["capture_busy_since"] = now
+    ss["last_sensor_fire_status"] = "firing..."
+    ss["last_sensor_fire_error"] = ""
+    ss["last_sensor_fire_ts"] = now
 
     try:
-        ensure_active_model_loaded_or_raise(blocking=True)
+        trigger_source = "manual_test" if job_kind == "manual_test" else "sensor"
+        run_capture_infer_dual(trigger_source=trigger_source)
 
-        run_capture_infer_dual(trigger_source="sensor")
-
-        ss["last_error"] = None
-        ss["last_sensor_fire_status"] = "OK (infer done)"
-        ss["last_sensor_fire_error"] = ""
+        if ss.get("last_result") is None:
+            err = ss.get("last_error") or "Inferência não gerou resultado."
+            ss["last_sensor_fire_status"] = "ERR"
+            ss["last_sensor_fire_error"] = str(err)
+        else:
+            ss["last_error"] = None
+            ss["last_sensor_fire_status"] = "OK (infer done)"
+            ss["last_sensor_fire_error"] = ""
 
     except Exception as e:
         ss["last_sensor_fire_status"] = "ERR"
@@ -4623,8 +4829,17 @@ def execute_sensor_job_if_ready():
         # 🔓 libera estados SEMPRE
         ss["sensor_job_pending"] = False
         ss["sensor_job_kind"] = None
+        ss["pending_trigger"] = False
+        ss["pending_trigger_src"] = None
+        ss["sensor_fire_now"] = False
+        ss["sensor_exec_request"] = False
+        ss["sensor_exec_ready_at"] = 0.0
         ss["capture_busy"] = False
         ss["capture_busy_since"] = 0.0
+        # Força um ciclo extra após disparo do sensor para consumir rapidamente
+        # a próxima transição vinda da serial sem depender do botão RESET.
+        if job_kind == "sensor" and ss.get("serial_on", False):
+            ss["sensor_force_rerun_once"] = True
 
 
 # ==========================================================
@@ -4632,10 +4847,15 @@ def execute_sensor_job_if_ready():
 # ==========================================================
 def run_capture_infer_dual(trigger_source: str = "button"):
     """Captura frame fresco (ou last_frame) e executa inferência DUAL.
-    trigger_source: 'button' ou 'sensor' (vai para o log).
+    trigger_source: 'button', 'sensor' ou 'manual_test' (vai para o log).
     """
     st.session_state["last_error"] = None
     st.session_state["last_warning"] = None
+    if trigger_source == "sensor":
+        # Sensor: limpa resultado anterior, mas não bloqueia a inferência só porque
+        # o flag lógico mudou no meio do ciclo. Em campo isso estava abortando o fluxo
+        # após a foto, deixando a sensação de que "bateu a foto mas não inferiu".
+        st.session_state["last_result"] = None
 
     # normaliza serial lido/digitado para manter consistência no log e no XML
     st.session_state["serial_qr_code"] = normalize_serial_qr(st.session_state.get("serial_qr_code", ""))
@@ -4676,14 +4896,43 @@ def run_capture_infer_dual(trigger_source: str = "button"):
         return
     # pega frame
     src = None
-    if st.session_state.get("camera_on") and st.session_state.get("cap") is not None:
+
+    # Para o sensor, NUNCA prioriza cache antigo como primeira fonte.
+    # O bug relatado em campo era justamente reaproveitar live/display de um ciclo anterior,
+    # congelando a imagem na 1ª captura e fazendo a inferência usar frame velho.
+    # Estratégia corrigida:
+    #   1) sensor -> tenta frame fresco da câmera primeiro
+    #   2) fallback para snapshot da borda 0->1 (sensor_edge_frame)
+    #   3) só então usa live/display atuais como último recurso
+    if trigger_source == "sensor":
+        src = None
+    elif trigger_source == "manual_test":
+        # TESTE 1x deve se comportar como uma nova captura real.
+        # Não pode priorizar display_frame/frozen_frame do ciclo anterior,
+        # senão a foto fica aparentemente "travada" mesmo trocando o cover.
+        src = None
+
+    # Se não houver frame cached, tenta câmera.
+    if src is None and st.session_state.get("camera_on") and st.session_state.get("cap") is not None:
         cap = st.session_state["cap"]
         try:
             if trigger_source == "sensor":
-                # Sensor: 1 frame rápido com timeout (não trava UI)
-                src = read_one_frame_timeout(cap, timeout_s=1.5)
+                # Sensor precisa SEMPRE tentar um frame fresco primeiro.
+                # Flush maior reduz risco de pegar buffer velho logo após 0->1.
+                src = read_fresh_frame(
+                    cap,
+                    flush_grabs=6,
+                    sleep_ms=12,
+                    extra_reads=2
+                )
+            elif trigger_source == "manual_test":
+                src = read_fresh_frame(
+                    cap,
+                    flush_grabs=2,
+                    sleep_ms=5,
+                    extra_reads=1
+                )
             else:
-                # Botão: flush para pegar frame mais fresco
                 src = read_fresh_frame(
                     cap,
                     flush_grabs=12,
@@ -4696,9 +4945,23 @@ def run_capture_infer_dual(trigger_source: str = "button"):
 
         if src is not None:
             st.session_state["last_frame"] = src.copy()
-    else:
+
+    # Fallbacks controlados para o sensor: primeiro o snapshot da borda 0->1,
+    # depois live/display do ciclo atual. Isso evita reciclar imagem antiga cedo demais.
+    if src is None and trigger_source == "sensor":
+        edge = st.session_state.get("sensor_edge_frame")
+        live = st.session_state.get("live_frame")
+        disp = st.session_state.get("display_frame")
+        if isinstance(edge, np.ndarray):
+            src = edge.copy()
+        elif isinstance(live, np.ndarray):
+            src = live.copy()
+        elif isinstance(disp, np.ndarray):
+            src = disp.copy()
+
+    elif src is None:
         lf = st.session_state.get("last_frame")
-        src = lf.copy() if lf is not None else None
+        src = lf.copy() if isinstance(lf, np.ndarray) else None
 
     if src is None:
         st.session_state["last_error"] = "Sem imagem para inferir (ligue a câmera e capture)."
@@ -4716,13 +4979,20 @@ def run_capture_infer_dual(trigger_source: str = "button"):
     # Tempo de teste (para log)
     start_dt = datetime.now()
     try:
-        cap_for_temporal = st.session_state.get("cap") if st.session_state.get("camera_on", False) else None
-        if trigger_source == "sensor":
-            res = infer_dual_with_optional_temporal_timeout(src, cap=cap_for_temporal, timeout_s=6.0)
+        # Para sensor/manual_test, usar a própria foto capturada sem depender de frames extras.
+        if trigger_source in ("sensor", "manual_test"):
+            cap_for_temporal = None
         else:
-            print("[DEBUG] entrando na inferência...")
-            res = infer_dual_with_optional_temporal(src, cap=cap_for_temporal)
-            print("[DEBUG] inferência retornou.")
+            cap_for_temporal = st.session_state.get("cap") if st.session_state.get("camera_on", False) else None
+        print("[DEBUG] entrando na inferência...")
+        # IMPORTANTE:
+        # O TESTE: Disparar 1x já está validado em campo e usa este mesmo funil com sucesso.
+        # Para o sensor, a foto já está sendo capturada corretamente; o que faltava era
+        # executar a MESMA inferência estável do manual_test, sem o wrapper de timeout
+        # específico do sensor que estava retornando sem resultado em produção.
+        # Portanto, sensor e manual_test passam a compartilhar exatamente a mesma chamada.
+        res = infer_dual_with_optional_temporal(src, cap=cap_for_temporal)
+        print("[DEBUG] inferência retornou.")
         end_dt = datetime.now()
         test_time_sec = (end_dt - start_dt).total_seconds()
 
@@ -4934,71 +5204,89 @@ def fuse_dual_industrial(left_res, right_res):
 # ==========================================================
 
 if btn_capture:
+    arm_manual_override(1.2)
+    clear_sensor_locks()
     run_capture_infer_dual(trigger_source="button")
 
-# =========================
-# SENSOR AUTO JOB
-# =========================
-# Executa a inspeção armada pelo Serial de forma estável e NÃO-BLOQUEANTE.
-# Importante: não usamos time.sleep aqui; aguardamos o tempo de settle via timestamps,
-# para evitar que o auto-refresh interrompa a execução e deixe a UI "presa" em firing.
-if st.session_state.get("sensor_job_pending", False) and (st.session_state.get("sensor_job_kind") == "sensor"):
-    now = time.time()
-    settle_ms = int(st.session_state.get("sensor_settle_ms", 220))
-    armed_ts = float(st.session_state.get("sensor_job_armed_ts", now))
-    ready_at = float(st.session_state.get("sensor_job_ready_at", armed_ts + (settle_ms / 1000.0)))
+# Execução blindada do TESTE: Disparar 1x.
+# Roda somente aqui, depois que run_capture_infer_dual já está definido,
+# para não depender do caminho do sensor com Serial ON.
+if st.session_state.get("manual_test_request", False):
+    from_sensor_bridge = bool(st.session_state.get("sensor_to_manual_request", False))
+    st.session_state["manual_test_request"] = False
+    st.session_state["sensor_to_manual_request"] = False
 
-    # Espera o tempo de estabilização SEM bloquear o script (não depender de sleep)
-    if now < ready_at:
-        st.session_state["last_sensor_fire_status"] = "arming..."
+    if not from_sensor_bridge:
+        arm_manual_override(0.8)
+        clear_sensor_locks()
+
+    # Sempre sair do modo congelado antes da captura para buscar
+    # um frame novo da câmera em vez de reciclar a última foto exibida.
+    st.session_state["frozen"] = False
+    st.session_state["frozen_frame"] = None
+    st.session_state["last_error"] = None
+    st.session_state["last_warning"] = None
+    st.session_state["last_result"] = None
+    st.session_state["last_sensor_fire_status"] = "firing...(sensor)" if from_sensor_bridge else "firing...(manual test)"
+    st.session_state["last_sensor_fire_error"] = ""
+    st.session_state["capture_busy"] = True
+    st.session_state["capture_busy_since"] = time.time()
+
+    try:
+        run_capture_infer_dual(trigger_source="sensor" if from_sensor_bridge else "manual_test")
+        if st.session_state.get("last_result") is None:
+            err = st.session_state.get("last_error") or "Inferência não gerou resultado."
+            st.session_state["last_sensor_fire_status"] = "ERR"
+            st.session_state["last_sensor_fire_error"] = str(err)
+        else:
+            st.session_state["frozen"] = False
+            st.session_state["frozen_frame"] = None
+            st.session_state["last_sensor_fire_status"] = "OK (sensor)" if from_sensor_bridge else "OK (manual test)"
+            st.session_state["last_sensor_fire_error"] = ""
+            if not from_sensor_bridge:
+                st.session_state["sensor_force_rerun_once"] = True
+    except Exception as e:
+        st.session_state["last_sensor_fire_status"] = "ERR"
+        st.session_state["last_sensor_fire_error"] = str(e)
+        st.session_state["last_error"] = f"Erro na inferência: {e}"
+    finally:
+        st.session_state["capture_busy"] = False
+        st.session_state["capture_busy_since"] = 0.0
+        if from_sensor_bridge:
+            st.session_state["sensor_infer_running"] = False
+            st.session_state["sensor_force_rerun_once"] = True
+
+# Execução do sensor: borda -> pequeno settle -> enfileira o mesmo funil estável do TESTE 1x.
+if (
+    st.session_state.get("sensor_exec_request", False)
+    and st.session_state.get("serial_on", False)
+    and (not manual_override_active())
+    and (not st.session_state.get("capture_busy", False))
+):
+    ready_at = float(st.session_state.get("sensor_exec_ready_at", 0.0))
+    now_sensor = time.time()
+    if now_sensor < ready_at:
+        st.session_state["last_sensor_fire_status"] = "arming...(sensor)"
         st.session_state["last_sensor_fire_error"] = ""
     else:
-        # Executa 1x quando estiver pronto
-        if not st.session_state.get("capture_busy", False):
-            st.session_state["capture_busy"] = True
-            st.session_state["capture_busy_since"] = time.time()
-            st.session_state["last_sensor_fire_error"] = ""
-            st.session_state["last_sensor_fire_status"] = "firing..."
-            st.session_state["last_sensor_fire_ts"] = now
-            try:
-                cap = st.session_state.get("cap")
-                cam_ok = bool(st.session_state.get("camera_on", False)) and (cap is not None)
+        st.session_state["sensor_exec_request"] = False
+        st.session_state["sensor_exec_ready_at"] = 0.0
+        st.session_state["pending_trigger"] = False
+        st.session_state["pending_trigger_src"] = None
+        st.session_state["sensor_job_pending"] = False
+        st.session_state["sensor_job_kind"] = None
+        st.session_state["sensor_job_armed_ts"] = 0.0
+        st.session_state["sensor_job_ready_at"] = 0.0
+        st.session_state["sensor_exec_retry_count"] = 0
+        st.session_state["last_sensor_fire_status"] = "queued...(sensor)"
+        st.session_state["last_sensor_fire_error"] = ""
+        if not st.session_state.get("sensor_infer_running", False):
+            st.session_state["sensor_infer_running"] = True
+            st.session_state["sensor_to_manual_request"] = True
+            st.session_state["manual_test_request"] = True
+            st.rerun()
 
-                # Se o preview está ativo via cap, mas camera_on ficou False por algum motivo, normaliza
-                if (cap is not None) and (not st.session_state.get("camera_on", False)):
-                    try:
-                        if hasattr(cap, "isOpened") and cap.isOpened():
-                            st.session_state["camera_on"] = True
-                            cam_ok = True
-                    except Exception:
-                        pass
-
-                if cam_ok:
-                    print("[SENSOR] trigger solicitado")
-                    run_capture_infer_dual(trigger_source="sensor")
-
-                    # conclui job
-                    st.session_state["sensor_job_pending"] = False
-                    st.session_state["sensor_job_kind"] = None
-                    if st.session_state.get("last_result") is None:
-                        err = st.session_state.get("last_error") or "Inferência não gerou resultado."
-                        st.session_state["last_sensor_fire_error"] = str(err)
-                        st.session_state["last_sensor_fire_status"] = "ERR"
-                    else:
-                        st.session_state["last_sensor_fire_status"] = "OK (infer done)"
-                else:
-                    st.session_state["last_sensor_fire_error"] = "Trigger ignorado: câmera desligada/indisponível."
-                    st.session_state["last_sensor_fire_status"] = "SKIP"
-            except Exception as e:
-                st.session_state["last_sensor_fire_error"] = str(e)
-                st.session_state["last_sensor_fire_status"] = "ERR"
-                st.session_state["last_error"] = f"Erro no trigger do sensor: {e}"
-            finally:
-                st.session_state["capture_busy"] = False
-                st.session_state["capture_busy_since"] = 0.0
-                # consome a job (1 disparo por armação)
-                st.session_state["sensor_job_pending"] = False
-                st.session_state["sensor_job_kind"] = None
+# Execução via sensor_exec_request agora usa o mesmo funil estável do TESTE: Disparar 1x.
 
 # ==========================================================
 # Frame live (visualização) + assinatura p/ detecção de troca
@@ -5037,30 +5325,43 @@ if frame is not None:
 
 # ==========================================================
 # Auto-trigger extra: troca de peça por mudança de imagem (quando sensor fica PRESENT=1 contínuo)
+# OBS: só habilita depois da 1ª inferência válida; isso evita loop logo ao ligar a serial.
 # ==========================================================
 ss = st.session_state
-if ss.get("serial_on", False) and bool(ss.get("sensor_present", False)) and bool(ss.get("serial_autorefresh", True)):
-    # Só tenta armar se não estiver ocupado e não houver job pendente
+if (
+    (not manual_override_active())
+    and ss.get("serial_on", False)
+    and bool(ss.get("sensor_present", False))
+    and bool(ss.get("serial_autorefresh", True))
+    and bool(ss.get("enable_image_autotrigger", False))
+    and (ss.get("last_infer_sig", None) is not None)
+    and (float(ss.get("last_infer_ts", 0.0)) > 0.0)
+):
     if (not ss.get("capture_busy", False)) and (not ss.get("sensor_job_pending", False)):
         now = time.time()
         min_interval = float(ss.get("serial_min_interval_s", 0.8))
         last_ts = float(ss.get("last_infer_ts", 0.0))
-        # diferença entre frame atual e último frame que foi inferido
         diff_thr = float(ss.get("serial_image_diff_thr", 6.0))
         live_sig = ss.get("live_sig", None)
         last_sig = ss.get("last_infer_sig", None)
         d = signature_diff(live_sig, last_sig)
 
-        # Rearma por imagem: se mudou bastante e passou um intervalo mínimo, arma uma inspeção nova.
         if (now - last_ts) >= min_interval and d >= diff_thr:
-            # Só arma se não houver job pendente (evita re-armar em loop)
-            if (not ss.get("sensor_job_pending", False)) and (not ss.get("capture_busy", False)):
-                ss["sensor_job_pending"] = True
-                ss["sensor_job_kind"] = "sensor"
-                ss["sensor_job_armed_ts"] = now
-                ss["sensor_job_ready_at"] = now + (float(ss.get("sensor_settle_ms", 220)) / 1000.0)
-                ss["last_sensor_fire_status"] = f"arming...(imgΔ={d:.1f})"
-            ss["last_sensor_fire_error"] = ""
+            # Auto-trigger por imagem desativado nesta build de diagnóstico.
+            pass
+# ==========================================================
+# EXECUTA JOB DO SENSOR ANTES DO LAYOUT PRINCIPAL
+# ==========================================================
+# Fluxo legado desativado nesta build: o sensor usa apenas sensor_exec_request,
+# evitando um segundo executor competir com o mesmo disparo.
+# execute_sensor_job_if_ready()
+
+# Um rerun extra após o disparo do sensor ajuda a drenar eventos pendentes
+# da serial e evita a dependência do botão RESET SENSOR STATE.
+if st.session_state.get("sensor_force_rerun_once", False) and (not st.session_state.get("capture_busy", False)):
+    st.session_state["sensor_force_rerun_once"] = False
+    st.rerun()
+
 # ==========================================================
 # MAIN — mensagens de erro
 # ==========================================================
@@ -5403,37 +5704,6 @@ def _cleanup_serial():
         pass
 
 atexit.register(_cleanup_serial)
-
-# Executa o job do sensor no final do script (após todas as defs)
-execute_sensor_job_if_ready()
-
-
-# ==========================================================
-# EXEC SENSOR JOB (determinístico):
-# quando o Serial arma `sensor_job_pending`, roda captura+infer
-# ==========================================================
-_ss = st.session_state
-if _ss.get("serial_on", False) and _ss.get("sensor_job_pending", False) and not _ss.get("capture_busy", False):
-    _now = time.time()
-    _ready_at = float(_ss.get("sensor_job_ready_at", 0.0))
-    if _now >= _ready_at:
-        _ss["capture_busy"] = True
-        _ss["capture_busy_since"] = _now
-        try:
-            ensure_active_model_loaded_or_raise(blocking=True)
-            run_capture_infer_dual(trigger_source="sensor")
-            _ss["last_error"] = None
-            _ss["last_sensor_fire_status"] = "OK (infer done)"
-            _ss["last_sensor_fire_error"] = ""
-        except Exception as _e:
-            _ss["last_sensor_fire_status"] = "ERR"
-            _ss["last_sensor_fire_error"] = str(_e)
-            _ss["last_error"] = f"Erro na inferência: {_e}"
-        finally:
-            _ss["sensor_job_pending"] = False
-            _ss["sensor_job_kind"] = None
-            _ss["capture_busy"] = False
-            _ss["capture_busy_since"] = 0.0
 
 
 # ==========================================================
