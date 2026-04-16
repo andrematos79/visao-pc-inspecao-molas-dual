@@ -1,0 +1,7 @@
+﻿.venv_svc/
+dataset_auto_evidencias/
+dataset_coleta_industrial/
+logs/
+reports/
+__pycache__/
+*.pyc
