@@ -1,0 +1,23 @@
+{
+  "threshold_presente": 0.71,
+  "threshold_ng_ok": 0.6,
+  "threshold_ng_ng": 0.75,
+  "normalize_lab_equalize": true,
+  "temporal_smoothing_enabled": true,
+  "temporal_n_frames": 3,
+  "temporal_delay_ms": 25,
+  "roi": {
+    "ESQ": {
+      "x0": 0,
+      "x1": 29,
+      "y0": 28,
+      "y1": 83
+    },
+    "DIR": {
+      "x0": 69,
+      "x1": 100,
+      "y0": 23,
+      "y1": 83
+    }
+  }
+}

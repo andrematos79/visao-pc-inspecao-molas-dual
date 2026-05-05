@@ -1,0 +1,18 @@
+{
+  "img_size": [
+    224,
+    224
+  ],
+  "class_names": [
+    "NG_MISALIGNED",
+    "OK"
+  ],
+  "pos_class_name": "NG_MISALIGNED",
+  "pos_class_index": 0,
+  "best_threshold_ng": {
+    "thr": 0.3999999999999999,
+    "f1": 0.9999999994705884,
+    "prec": 0.9999999999705883,
+    "rec": 0.9999999999705883
+  }
+}

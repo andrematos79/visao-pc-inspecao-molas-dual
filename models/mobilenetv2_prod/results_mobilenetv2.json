@@ -1,0 +1,32 @@
+{
+  "model": "MobileNetV2",
+  "img_size": [
+    224,
+    224
+  ],
+  "batch_size": 32,
+  "classes": [
+    "OK",
+    "NG_MISALIGNED"
+  ],
+  "pos_class": "NG_MISALIGNED",
+  "pos_idx": 1,
+  "target_recall_ng": 0.9,
+  "th_ng": 0.0,
+  "test_accuracy": 0.5964912280701754,
+  "test_precision_weighted": 0.355801785164666,
+  "test_recall_weighted": 0.5964912280701754,
+  "test_f1_weighted": 0.44572970888760366,
+  "confusion_matrix": [
+    [
+      0,
+      23
+    ],
+    [
+      0,
+      34
+    ]
+  ],
+  "latency_ms_per_img": 28.35299122849839,
+  "throughput_img_per_s": 35.269647281337704
+}
