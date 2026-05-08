@@ -45,8 +45,13 @@ CAM_INDEX = 0
 SERIAL_PORT = "COM3"
 SERIAL_BAUD = 115200
 
-SETTLE_S = 1.20
+SETTLE_S = 0.30
 REARM_ZERO_REQUIRED = True
+# v8.1-fastline-fix: após sensor voltar para 0, aguarda e limpa buffer serial
+# para evitar que um PRESENT=1 antigo dispare foto da base vazia.
+REARM_CLEAR_BUFFER_S = 0.25
+# Durante o settle, monitora se o sensor voltou para 0. Se voltar, cancela a foto.
+SETTLE_CANCEL_ON_ZERO = True
 MAX_CYCLES = 0  # 0 = infinito
 
 IMG_SIZE = (224, 224)
@@ -60,7 +65,7 @@ DEFAULT_THR_NG_OK_ESQ = 0.9900
 DEFAULT_THR_NG_NG_DIR = 0.85
 DEFAULT_THR_NG_OK_DIR = 0.60
 DEFAULT_NORMALIZE_LAB = True
-DEFAULT_TEMPORAL_N_FRAMES = 3
+DEFAULT_TEMPORAL_N_FRAMES = 1
 DEFAULT_TEMPORAL_DELAY_MS = 25
 
 DEFAULT_ROI = {
@@ -85,7 +90,7 @@ def write_heartbeat(status="running", cycle=None):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "status": status,
             "cycle": cycle,
-            "core_version": "v19-final-v2-engine-v1.6.5",
+            "core_version": "v19-final-v8.1.2-stable-reset",
         })
     except Exception:
         pass
@@ -422,7 +427,7 @@ def infer_dual_on_frame_v18(frame_bgr, models: IndustrialModels, cfg: dict):
         "cls_pres_dir": cls_pres_dir,
         "conf_pres_esq_argmax": float(conf_esq),
         "conf_pres_dir_argmax": float(conf_dir),
-        "core_version": "v19-final-v2-engine-v1.6.5",
+        "core_version": "v19-final-v8.1.2-stable-reset",
     }
 
 
@@ -531,9 +536,9 @@ def inspect_once(cap, models, cfg, cycle_id):
         raise RuntimeError("Falha ao capturar frame.")
     log(f"[{cycle_id:03d}] capture_ok shape={frame.shape}")
 
-    n_frames = int(cfg.get("temporal_n_frames", DEFAULT_TEMPORAL_N_FRAMES))
+    # v8.1.2 stable reset: força 1 frame temporal para evitar inferência dupla e variação por config_molas.json
+    n_frames = 1
     delay_ms = int(cfg.get("temporal_delay_ms", DEFAULT_TEMPORAL_DELAY_MS))
-    n_frames = max(1, n_frames)
 
     results = [infer_dual_on_frame_v18(frame, models, cfg)]
     for _ in range(n_frames - 1):
@@ -598,7 +603,7 @@ def inspect_once(cap, models, cfg, cycle_id):
         "attention_flag": bool(res.get("attention_flag", False)),
         "aprovado": bool(res.get("aprovado", final == "OK")),
         "status": "OK",
-        "core_version": "v19-final-v2-engine-v1.6.5",
+        "core_version": "v19-final-v8.1.2-stable-reset",
         "note": "v1.6.2: presence mantido + guarda conservadora para NG_MISALIGNED esquerdo + thresholds por lado",
     }
     # v19 final: publicar campos completos para a interface Streamlit v18
@@ -670,8 +675,56 @@ def wait_for_zero(ser):
                 return
 
 
+def drain_serial_input(ser, duration_s=0.10):
+    """Descarta eventos seriais antigos após rearme/cancelamento."""
+    end = time.time() + max(0.0, float(duration_s))
+    try:
+        while time.time() < end:
+            raw = ser.readline()
+            if not raw:
+                continue
+            try:
+                line = raw.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                line = str(raw)
+            val = parse_serial_line(line)
+            if val is not None:
+                log(f"serial_drain={val} raw='{line}'")
+        try:
+            ser.reset_input_buffer()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def settle_still_present_or_cancel(ser, settle_s):
+    """Aguarda o settle monitorando retorno para 0.
+
+    Se a mão/peça acionou o sensor rapidamente e saiu antes do fim do settle,
+    cancela a captura para evitar foto da base vazia.
+    Como o Arduino atual envia apenas mudanças de estado, se nenhum 0 chegar
+    durante o settle assumimos que o cover continua presente.
+    """
+    deadline = time.time() + max(0.0, float(settle_s))
+    while time.time() < deadline:
+        raw = ser.readline()
+        if not raw:
+            continue
+        try:
+            line = raw.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            line = str(raw)
+        val = parse_serial_line(line)
+        if val is not None:
+            log(f"serial_settle={val} raw='{line}'")
+            if SETTLE_CANCEL_ON_ZERO and val == 0:
+                return False
+    return True
+
+
 def main():
-    log("=== SVC CORE MOLAS V19 FINAL - V1.6.5 STABLE ENGINE ===")
+    log("=== SVC CORE MOLAS V19 FINAL - V8.1.2 STABLE RESET ===")
     cfg = load_config()
 
     log("Abrindo câmera...")
@@ -695,7 +748,15 @@ def main():
             write_heartbeat(status="processing", cycle=cycle)
 
             log(f"[{cycle:03d}] sensor_triggered -> aguardando settle {SETTLE_S:.2f}s")
-            time.sleep(SETTLE_S)
+            if not settle_still_present_or_cancel(ser, SETTLE_S):
+                log(f"[{cycle:03d}] CANCELADO: sensor voltou para 0 durante settle; não capturar base vazia.")
+                # v8.1.1: NÃO drenar a serial após cancelamento.
+                # Motivo: na inserção real pode ocorrer sequência 1->0->1
+                # (mão/cover passando pelo sensor e depois cover assentado na base).
+                # Se drenarmos aqui, podemos consumir justamente o PRESENT=1 correto
+                # do cover já posicionado, e o sistema fica só incrementando ciclo sem capturar.
+                log("Aguardando próxima borda PRESENT=1...")
+                continue
 
             try:
                 inspect_once(cap, models, cfg, cycle)
@@ -705,6 +766,7 @@ def main():
             if REARM_ZERO_REQUIRED:
                 log(f"[{cycle:03d}] aguardando sensor=0 para rearmar...")
                 wait_for_zero(ser)
+                drain_serial_input(ser, REARM_CLEAR_BUFFER_S)
                 log(f"[{cycle:03d}] rearmado")
 
             log("Aguardando próxima peça...")

@@ -1,27 +1,29 @@
-# SVC – Computer Vision System for Spring Inspection
+# SVC Industrial
+### Computer Vision System for Spring Inspection
 
 <p align="center">
   <img src="assets/logo_sistema.png" width="450">
 </p>
 
-Industrial AI-based computer vision platform for automated detection of metallic spring defects in mobile phone chargers.
+Industrial AI-based computer vision platform for automated detection of metallic spring defects in electronic power supply assemblies.
 
-**Inspection Mode:** DUAL ROI Inspection
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19323586.svg)](https://doi.org/10.5281/zenodo.19323586)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Release](https://img.shields.io/badge/version-v1.0.1--industrial-blue)
+![Release](https://img.shields.io/badge/version-v2.0_Stable-blue)
 
-**Latest version:** **SVC v1.1.0 – Industrial ROI calibration and temporal inference smoothing**
-**Latest version DOI:** https://doi.org/10.5281/zenodo.19323586  
-**Concept DOI (all versions):** https://doi.org/10.5281/zenodo.19207170
+**Latest version:** **v2.0 Stable**
+**Latest version DOI:**  
+https://doi.org/10.5281/zenodo.19323586  
+**Concept DOI (all versions):** 
+https://doi.org/10.5281/zenodo.19207170
 
 ---
 
 # Overview
 
-**SVC (Computer Vision System for Spring Inspection)** is a low-cost industrial computer vision platform designed for **automated inspection of metallic springs installed inside mobile phone chargers**.
+**SVC Industrial (Computer Vision System for Spring Inspection)** is a low-cost industrial computer vision platform designed for **automated inspection of metallic springs installed inside electronic power supply assemblies**.
 
 The system uses **deep learning, industrial triggering mechanisms, and a dual‑ROI inspection strategy** to detect:
 
@@ -29,10 +31,10 @@ The system uses **deep learning, industrial triggering mechanisms, and a dual‑
 • Misaligned springs  
 • Correct assembly conditions  
 
-The system evolved from a **laboratory prototype to an industrial-ready solution (v1.1.0)** validated and calibrated under real manufacturing conditions.
+The system evolved from a laboratory prototype into a production-oriented industrial inspection platform validated under real manufacturing conditions.
 
 Developed by André Gama de Matos within the context of the Professional Master’s Program in Electrical Engineering at Amazonas State University (UEA)
-© 2026 André Gama de Matos
+© 2026 André Gama de Matos.
 
 ---
 
@@ -64,19 +66,13 @@ Developed by André Gama de Matos within the context of the Professional Master�
 
 Operational pipeline:
 
-Sensor Trigger  
-↓  
-Image Acquisition (USB Industrial Camera)  
-↓  
-ROI Extraction (Left / Right Spring Regions)  
-↓  
-CNN Classification (MobileNetV2)  
-↓  
-Dual Industrial Decision Logic  
-↓  
-Operator Interface + Production Logging  
-↓  
-Evidence Storage + Reporting + Email Notification
+Sensor Trigger
+→ Image Acquisition
+→ ROI Extraction
+→ CNN Classification
+→ Dual Industrial Decision Logic
+→ Operator Interface + Production Logging
+→ Evidence Storage + Reporting + Email Notification
 
 The system supports **automatic triggering using a proximity sensor connected to an Arduino Uno microcontroller**.
 
@@ -95,13 +91,14 @@ E18‑D80NK proximity sensor
 
 # Software Stack
 
-Python  
-TensorFlow / Keras  
-OpenCV  
-Streamlit  
-PySerial  
-Pandas  
-Matplotlib  
+| Layer | Technology |
+|---|---|
+| AI Framework | TensorFlow / Keras |
+| Computer Vision | OpenCV |
+| Interface | Streamlit |
+| Serial Communication | PySerial |
+| Data Processing | Pandas |
+| Visualization | Matplotlib |
 
 ---
 
@@ -246,29 +243,95 @@ The results demonstrate the feasibility of **low‑cost deep learning systems fo
 
 ---
 
+# Technology Readiness
+
+The SVC Industrial platform evolved from an academic laboratory prototype into a production-oriented industrial inspection system validated under real manufacturing conditions.
+
+The project includes:
+
+- real-time industrial inspection
+- automated evidence management
+- AI-based defect classification
+- industrial reporting
+- production traceability
+- embedded triggering mechanisms
+
+---
+
+# System Images
+
+## Industrial Main Interface
+
+![Industrial Interface](Docs/figures/industrial_main_interface.png)
+
+## Approved Inspection Example
+
+![Approved Result](Docs/figures/industrial_approved_result.png)
+
+## Rejected Inspection Example
+
+![Rejected Result](Docs/figures/industrial_rejected_result.png)
+
+## Audit Panel
+
+![Audit Panel](Docs/figures/industrial_audit_panel.png)
+
+## System Architecture
+
+![Architecture](Docs/figures/system_architecture.png)
+
+## Validation Results
+
+![Validation Results](Docs/figures/svc_validation_results.png)
+
+---
+
+# Future Work
+
+Planned future developments include:
+
+- template-based trigger without external sensors
+- advanced industrial MES integration
+- multi-camera synchronization
+- severe misalignment specialized datasets
+- automated ROI self-calibration
+- edge AI optimization for lower inspection cycle times
+- industrial statistical process monitoring
+
+---
+
 # Installation
 
-Create project directory:
-
-C:\SVC_INSPECAO_MOLAS
+```bash
+mkdir C:\SVC_INSPECAO_MOLAS
+cd C:\SVC_INSPECAO_MOLAS
+```
 
 Create virtual environment:
 
+```bash
 python -m venv .venv_svc
+```
 
 Activate environment:
 
+```powershell
 .\.venv_svc\Scripts\Activate.ps1
+```
 
 Install dependencies:
 
+```bash
 pip install -r requirements.txt
+```
 
 ---
 
 # Running the System
 
+```bash
 streamlit run app_camera_infer_dual_freeze.py
+```
 
 ---
 
@@ -289,11 +352,11 @@ The project demonstrates the feasibility of **deploying deep learning‑based in
 
 If you use this system in research or industrial projects, please cite:
 
-Matos, A. G. (2026)  
-**SVC — Computer Vision System for Spring Inspection**  
-Version 1.0.1  
-Zenodo  
-https://doi.org/10.5281/zenodo.19323586
+> Matos, A. G. (2026).  
+> **SVC Industrial — Computer Vision System for Spring Inspection**.  
+> Version 2.0 Stable.  
+> Zenodo.  
+> https://doi.org/10.5281/zenodo.19323586
 
 ---
 
@@ -302,7 +365,7 @@ https://doi.org/10.5281/zenodo.19323586
 André Gama de Matos  
 Engineer — Computer Vision and Embedded Systems
 
-Professional Master's in Electrical Engineering  
+Professional Master’s Program in Electrical Engineering
 Universidade do Estado do Amazonas (UEA)
 
 Advisor  

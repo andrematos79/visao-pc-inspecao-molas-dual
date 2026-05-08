@@ -88,7 +88,7 @@ def parse_serial_line(line: str):
 # UI — Resultado Industrial (visual profissional)
 # ==========================================================
 def render_resultado_industrial(res: Optional[dict]) -> None:
-    """Renderiza painel de resultado industrial com faixa de atenção para borda de decisão."""
+    """Renderiza painel de resultado industrial estilo ANDON: leitura rápida para operador e detalhes para engenharia."""
     if not isinstance(res, dict):
         return
 
@@ -101,7 +101,7 @@ def render_resultado_industrial(res: Optional[dict]) -> None:
             return "DESALINHADA", "#f59e0b"
         return "NG", "#dc2626"
 
-    final_code = str(res.get("defect_type") or ("OK" if res.get("aprovado", False) else "NG"))
+    final_code = str(res.get("defect_type") or ("OK" if res.get("aprovado", False) else "NG")).strip().upper()
     attention_flag = bool(res.get("attention_flag", False)) and final_code == "OK"
 
     if final_code == "OK" and attention_flag:
@@ -109,12 +109,14 @@ def render_resultado_industrial(res: Optional[dict]) -> None:
         cor_box = "#fef3c7"
         cor_text = "#92400e"
         cor_border = "#f59e0b"
+        status_label = "ATENÇÃO"
     else:
         is_ok = (final_code == "OK")
         titulo = "✔ APROVADO" if is_ok else "✖ REPROVADO"
         cor_box = "#dcfce7" if is_ok else "#fee2e2"
         cor_text = "#166534" if is_ok else "#7f1d1d"
         cor_border = "#22c55e" if is_ok else "#dc2626"
+        status_label = "LIBERADO" if is_ok else "BLOQUEAR PEÇA"
 
     esq_txt, esq_cor = _map_def(str(res.get("defect_esq", "OK")))
     dir_txt, dir_cor = _map_def(str(res.get("defect_dir", "OK")))
@@ -127,6 +129,7 @@ def render_resultado_industrial(res: Optional[dict]) -> None:
     thr_ng_ng = res.get("thr_ng_ng", None)
     band_esq = res.get("decision_band_esq", "-")
     band_dir = res.get("decision_band_dir", "-")
+    cycle = int(res.get("cycle", 0) or 0)
 
     def _fmt(v):
         try:
@@ -148,16 +151,28 @@ def render_resultado_industrial(res: Optional[dict]) -> None:
     if band_dir:
         details_dir += f" | banda={band_dir}"
 
+    cycle_badge = f"CICLO {cycle}" if cycle > 0 else "CICLO --"
+
     html = f"""
-<div style="border-radius:12px;padding:16px;background:{cor_box};border:3px solid {cor_border};text-align:center;margin-top:-34px;">
-  <div style="font-size:40px;font-weight:900;color:{cor_text};margin-bottom:10px;">{titulo}</div>
-  <div style="display:flex;justify-content:center;gap:48px;font-size:20px;font-weight:800;">
-    <div>ESQ<br><span style="display:inline-block;color:white;background:{esq_cor};padding:7px 18px;border-radius:8px;min-width:150px;">{esq_txt}</span></div>
-    <div>DIR<br><span style="display:inline-block;color:white;background:{dir_cor};padding:7px 18px;border-radius:8px;min-width:150px;">{dir_txt}</span></div>
+<div class="andon-result-card" style="background:{cor_box};border-color:{cor_border};color:{cor_text};">
+  <div class="andon-topline">
+    <span>{cycle_badge}</span>
+    <span>{status_label}</span>
   </div>
-  <div style="margin-top:10px;font-size:14px;font-weight:600;color:{cor_text};opacity:0.95;">
-    ESQ: {details_esq}<br>
-    DIR: {details_dir}
+  <div class="andon-title">{titulo}</div>
+  <div class="andon-sides">
+    <div class="andon-side">
+      <div class="andon-side-title">ESQ</div>
+      <div class="andon-side-pill" style="background:{esq_cor};">{esq_txt}</div>
+    </div>
+    <div class="andon-side">
+      <div class="andon-side-title">DIR</div>
+      <div class="andon-side-pill" style="background:{dir_cor};">{dir_txt}</div>
+    </div>
+  </div>
+  <div class="andon-details">
+    <div><b>ESQ:</b> {details_esq}</div>
+    <div><b>DIR:</b> {details_dir}</div>
   </div>
 </div>
 """
@@ -280,8 +295,8 @@ except Exception:
     HAS_MPL = False
 
 
-APP_VERSION = "v1.0.0"
-APP_STAGE = "Stable"
+APP_VERSION = "v19.0-final-v8.1-stable-reset"
+APP_STAGE = "External Core Stable Engine — Production Fast UI"
 
 # ==========================================================
 # MES / RASTREABILIDADE
@@ -492,6 +507,374 @@ EMAIL_CONTACTS_PATH = BASE_DIR / "email_contacts.json"
 AUTO_REPORT_CONFIG_PATH = BASE_DIR / "config_relatorios_automaticos.json"
 AUTO_REPORT_HISTORY_PATH = BASE_DIR / "historico_envio_relatorios.json"
 
+
+# ==========================================================
+# V19 FINAL — Ponte com motor externo anti-travamento
+# O core v1.6.5 controla sensor/câmera/inferência fora do Streamlit.
+# A interface v18 apenas consome runtime_status/last_result.json.
+# ==========================================================
+CORE_V19_SCRIPT = BASE_DIR / "svc_core_molas_v19_final_v8_1_stable_reset.py"
+CORE_STATUS_DIR = BASE_DIR / "runtime_status"
+CORE_LAST_RESULT_JSON = CORE_STATUS_DIR / "last_result.json"
+CORE_SUMMARY_JSON = CORE_STATUS_DIR / "summary.json"
+CORE_HEARTBEAT_JSON = CORE_STATUS_DIR / "heartbeat.json"
+
+
+def is_engineering_mode() -> bool:
+    """Retorna True apenas quando o modo Engenharia está ativo/desbloqueado.
+
+    Build v2.1-production-fast-visual:
+    - Operador: não carrega/renderiza imagens de ROI para reduzir overhead da UI.
+    - Operador: mantém a imagem principal visível, porém redimensionada para renderização rápida.
+    - Engenharia: mantém ROIs, overlay e recursos visuais de diagnóstico.
+    """
+    try:
+        return str(st.session_state.get("user_mode", "OPERADOR")).upper() == "ENGENHARIA" and bool(st.session_state.get("eng_unlocked", False))
+    except Exception:
+        return False
+
+
+def prepare_main_frame_for_display(frame_bgr, engineering: bool = False):
+    """Prepara imagem principal para st.image com menor custo no Modo Operador.
+
+    Engenharia: mantém resolução original para análise.
+    Operador: redimensiona antes de converter/renderizar, mantendo a visão da peça
+    mas reduzindo custo de conversão BGR->RGB e redraw do Streamlit.
+    """
+    if frame_bgr is None:
+        return None
+    try:
+        if engineering:
+            return frame_bgr
+        h, w = frame_bgr.shape[:2]
+        max_w = int(st.session_state.get("operator_preview_max_width", 700))
+        if w > max_w and max_w > 0:
+            new_h = max(1, int(h * (max_w / float(w))))
+            return cv2.resize(frame_bgr, (max_w, new_h), interpolation=cv2.INTER_AREA)
+        return frame_bgr
+    except Exception:
+        return frame_bgr
+
+
+def reset_production_counters_v19() -> None:
+    """Zera contadores da interface quando uma nova execução do CORE v19 começa."""
+    for k in [
+        "cnt_total", "cnt_ok", "cnt_ng", "cnt_ng_esq", "cnt_ng_dir",
+        "cnt_missing_esq", "cnt_missing_dir", "cnt_missing_both",
+        "cnt_misaligned_esq", "cnt_misaligned_dir", "cnt_misaligned_both",
+        "cnt_misto", "cnt_ok_attention",
+    ]:
+        st.session_state[k] = 0
+    st.session_state["history"] = []
+    st.session_state["last_result"] = None
+    st.session_state["last_frame"] = None
+    st.session_state["display_frame"] = None
+    st.session_state["frozen"] = False
+    st.session_state["frozen_frame"] = None
+    st.session_state["core_v19_last_cycle"] = 0
+    st.session_state["production_started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def clear_core_v19_runtime_files() -> None:
+    """Remove resultados antigos para a tela não abrir com a última peça da execução anterior."""
+    try:
+        CORE_STATUS_DIR.mkdir(exist_ok=True)
+        for p in list(CORE_STATUS_DIR.glob("*.json")) + list(CORE_STATUS_DIR.glob("*.tmp")):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _read_core_image(path_text: str):
+    try:
+        p = Path(str(path_text or ""))
+        if p.exists():
+            return cv2.imread(str(p))
+    except Exception:
+        return None
+    return None
+
+
+def core_v19_heartbeat() -> dict:
+    try:
+        if CORE_HEARTBEAT_JSON.exists():
+            return json.loads(CORE_HEARTBEAT_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return {}
+
+
+def core_v19_start_process() -> tuple[bool, str]:
+    """Inicia o motor externo. Ele será o dono do sensor/câmera."""
+    if not CORE_V19_SCRIPT.exists():
+        return False, f"Core não encontrado: {CORE_V19_SCRIPT}"
+    proc = st.session_state.get("core_v19_proc")
+    try:
+        if proc is not None and proc.poll() is None:
+            return True, "Core v19 já está rodando."
+    except Exception:
+        pass
+    try:
+        # Nova execução = tela limpa, sem resultado/ciclo herdado do uso anterior.
+        clear_core_v19_runtime_files()
+        reset_production_counters_v19()
+        st.session_state["core_v19_started_this_session"] = True
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        log_path = LOG_DIR / "core_v19_stdout.log"
+        log_f = open(log_path, "a", encoding="utf-8", buffering=1)
+        proc = subprocess.Popen(
+            [sys.executable, str(CORE_V19_SCRIPT)],
+            cwd=str(BASE_DIR),
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            creationflags=creationflags,
+        )
+        st.session_state["core_v19_proc"] = proc
+        st.session_state["core_v19_log_path"] = str(log_path)
+        st.session_state["external_core_enabled"] = True
+        return True, f"Core v19 iniciado (PID={proc.pid})."
+    except Exception as e:
+        return False, f"Falha ao iniciar core v19: {e}"
+
+
+def core_v19_stop_process() -> tuple[bool, str]:
+    proc = st.session_state.get("core_v19_proc")
+    if proc is None:
+        return True, "Nenhum processo core registrado nesta sessão. Se houver console aberto, feche manualmente."
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+        return True, "Core v19 parado."
+    except Exception as e:
+        return False, f"Falha ao parar core v19: {e}"
+
+
+def core_v19_process_alive() -> bool:
+    proc = st.session_state.get("core_v19_proc")
+    try:
+        return proc is not None and proc.poll() is None
+    except Exception:
+        return False
+
+
+def _core_status_to_v18_result(status: dict) -> dict:
+    result = str(status.get("defect_type") or status.get("result") or "OK").strip().upper()
+    defect_esq = str(status.get("defect_esq") or status.get("result_esq") or "OK").strip().upper()
+    defect_dir = str(status.get("defect_dir") or status.get("result_dir") or "OK").strip().upper()
+    aprovado = bool(status.get("aprovado", result == "OK"))
+
+    # v2.1-production-fast:
+    # No modo OPERADOR, não carregamos as imagens dos ROIs do disco.
+    # Isso reduz leitura de arquivo, conversão BGR/RGB e renderização no Streamlit.
+    # No modo ENGENHARIA, o comportamento anterior é preservado para diagnóstico.
+    if is_engineering_mode():
+        roi_esq_img = _read_core_image(status.get("roi_esq_path", ""))
+        roi_dir_img = _read_core_image(status.get("roi_dir_path", ""))
+    else:
+        roi_esq_img = None
+        roi_dir_img = None
+
+    return {
+        "defect_type": result,
+        "defect_esq": defect_esq,
+        "defect_dir": defect_dir,
+        "ok_esq": defect_esq == "OK",
+        "ok_dir": defect_dir == "OK",
+        "aprovado": aprovado,
+        "p_pres_esq": float(status.get("p_esq", status.get("p_pres_esq", 0.0))),
+        "p_pres_dir": float(status.get("p_dir", status.get("p_pres_dir", 0.0))),
+        "prob_ng_esq": float(status.get("prob_ng_esq", 0.0)),
+        "prob_ng_dir": float(status.get("prob_ng_dir", 0.0)),
+        "prob_ok_esq": float(status.get("prob_ok_esq", 1.0 - float(status.get("prob_ng_esq", 0.0)))),
+        "prob_ok_dir": float(status.get("prob_ok_dir", 1.0 - float(status.get("prob_ng_dir", 0.0)))),
+        "thr_presente": float(status.get("thr_presente", status.get("threshold", DEFAULT_THRESH_PRESENTE))),
+        "thr_ng_ok": float(status.get("thr_ng_ok", DEFAULT_THR_NG_OK)),
+        "thr_ng_ng": float(status.get("thr_ng_ng", DEFAULT_THR_NG_NG)),
+        "thr_ng_ok_esq": float(status.get("thr_ng_ok_esq", status.get("thr_ng_ok", DEFAULT_THR_NG_OK))),
+        "thr_ng_ok_dir": float(status.get("thr_ng_ok_dir", status.get("thr_ng_ok", DEFAULT_THR_NG_OK))),
+        "thr_ng_ng_esq": float(status.get("thr_ng_ng_esq", status.get("thr_ng_ng", DEFAULT_THR_NG_NG))),
+        "thr_ng_ng_dir": float(status.get("thr_ng_ng_dir", status.get("thr_ng_ng", DEFAULT_THR_NG_NG))),
+        "decision_band_esq": str(status.get("decision_band_esq", "")),
+        "decision_band_dir": str(status.get("decision_band_dir", "")),
+        "attention_flag": bool(status.get("attention_flag", False)),
+        "core_version": str(status.get("core_version", "v19-final-engine-v1.6.5")),
+        "image_path": str(status.get("image_path", "")),
+        "roi_esq": roi_esq_img,
+        "roi_dir": roi_dir_img,
+        "roi_esq_path": str(status.get("roi_esq_path", "")),
+        "roi_dir_path": str(status.get("roi_dir_path", "")),
+        "cycle": int(status.get("cycle", 0) or 0),
+        "source": "core_v19_external",
+    }
+
+
+def sync_core_v19_result_to_ui() -> None:
+    """Lê o resultado do core externo e alimenta a interface/recursos v18 uma única vez por ciclo."""
+    if not bool(st.session_state.get("external_core_enabled", True)):
+        return
+    # Evita carregar peça/contador antigo quando o app é aberto novamente.
+    if not bool(st.session_state.get("core_v19_started_this_session", False)) and not core_v19_process_alive():
+        return
+    if not CORE_LAST_RESULT_JSON.exists():
+        return
+    try:
+        status = json.loads(CORE_LAST_RESULT_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        st.session_state["core_v19_last_error"] = f"Falha ao ler last_result.json: {e}"
+        return
+
+    cycle = int(status.get("cycle", 0) or 0)
+    last_cycle = int(st.session_state.get("core_v19_last_cycle", 0) or 0)
+    res = _core_status_to_v18_result(status)
+
+    img = None
+    img_path = str(status.get("image_path", ""))
+    if img_path:
+        try:
+            p = Path(img_path)
+            if p.exists():
+                img = cv2.imread(str(p))
+        except Exception:
+            img = None
+
+    # Sempre atualiza visual do último resultado disponível.
+    st.session_state["last_result"] = res
+    if img is not None:
+        st.session_state["last_frame"] = img.copy()
+        st.session_state["display_frame"] = img.copy()
+        st.session_state["frozen"] = False
+        st.session_state["frozen_frame"] = None
+
+    # Só pós-processa quando chegar ciclo novo.
+    if cycle <= 0 or cycle == last_cycle:
+        return
+
+    st.session_state["core_v19_last_cycle"] = cycle
+    st.session_state["last_error"] = None
+    st.session_state["last_sensor_fire_status"] = f"core_v19_cycle_{cycle}"
+    st.session_state["last_sensor_fire_error"] = ""
+
+    # Atualiza KPIs, auditoria, evidências e logs sem interferir no motor.
+    try:
+        update_metrics_and_history(res)
+    except Exception as e:
+        st.session_state["core_v19_last_error"] = f"Falha KPI/histórico: {e}"
+
+    try:
+        auto_save_current_result_if_needed(res, frame_bgr=img, source="core_v19")
+    except Exception as e:
+        st.session_state["core_v19_last_error"] = f"Falha evidência automática: {e}"
+
+    try:
+        if not res.get("aprovado", False):
+            beep_ng()
+    except Exception:
+        pass
+
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        total = int(st.session_state.get("cnt_total", 0))
+        ok = int(st.session_state.get("cnt_ok", 0))
+        ng = int(st.session_state.get("cnt_ng", 0))
+        yield_pct = round((ok / total * 100.0), 2) if total > 0 else 0.0
+        th_local = float(res.get("thr_presente", DEFAULT_THRESH_PRESENTE))
+        cs_code, cs_detail = get_cs_code(res, th_local)
+        append_log_csv({
+            "timestamp": timestamp,
+            "modelo": st.session_state.get("product_model", ""),
+            "linha": st.session_state.get("line_name", ""),
+            "resultado_final": str(res.get("defect_type", "")),
+            "defect_esq": str(res.get("defect_esq", "")),
+            "defect_dir": str(res.get("defect_dir", "")),
+            "cs_code": cs_code,
+            "cs_detail": cs_detail,
+            "p_esq": round(float(res.get("p_pres_esq", 0.0)), 4),
+            "p_dir": round(float(res.get("p_pres_dir", 0.0)), 4),
+            "th_presente": th_local,
+            "camera_index": CAM_INDEX if 'CAM_INDEX' in globals() else 0,
+            "directshow": True,
+            "source": "core_v19",
+            "total": total,
+            "ok": ok,
+            "ng": ng,
+            "yield_pct": yield_pct,
+            "test_time_sec": "core_external",
+            "start_time": timestamp,
+            "end_time": timestamp,
+        })
+    except Exception as e:
+        st.session_state["core_v19_last_error"] = f"Falha log CSV: {e}"
+
+    try:
+        inspection_id = generate_inspection_id()
+        st.session_state["last_inspection_id"] = inspection_id
+        equipment_id = str(st.session_state.get("equipment_id", "SVC01")).strip()
+        mes_enabled = bool(st.session_state.get("mes_enabled", False))
+        traceability_enabled = bool(st.session_state.get("traceability_enabled", False))
+        production_order = str(st.session_state.get("production_order", "")).strip()
+        serial_number = normalize_serial_qr(st.session_state.get("serial_qr_code", ""))
+        operation_mode = str(st.session_state.get("user_mode", "OPERADOR"))
+        xml_path_str = ""
+        mes_status = "LOCAL"
+        if mes_enabled:
+            xml_path_str = create_inspection_xml(
+                inspection_id=inspection_id,
+                system_name=str(st.session_state.get("system_name", "SVC Inspeção de Molas - DUAL")),
+                equipment_id=equipment_id,
+                mes_enabled=mes_enabled,
+                traceability_enabled=traceability_enabled,
+                production_order=production_order,
+                serial_number=serial_number,
+                model_name=str(st.session_state.get("product_model", "")),
+                line_name=str(st.session_state.get("line_name", "")),
+                operation_mode=operation_mode,
+                result_left=str(res.get("defect_esq", "")),
+                result_right=str(res.get("defect_dir", "")),
+                final_result=str(res.get("defect_type", "")),
+                confidence_left=float(res.get("p_pres_esq", 0.0)),
+                confidence_right=float(res.get("p_pres_dir", 0.0)),
+                image_path=img_path,
+                mes_status="PENDENTE",
+                source="core_v19",
+            )
+            mes_status = "PENDENTE"
+        st.session_state["last_xml_path"] = xml_path_str
+        st.session_state["last_mes_status"] = mes_status
+        append_trace_log_csv({
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "inspection_id": inspection_id,
+            "system_name": str(st.session_state.get("system_name", "SVC Inspeção de Molas - DUAL")),
+            "equipment_id": equipment_id,
+            "mes_enabled": mes_enabled,
+            "traceability_enabled": traceability_enabled,
+            "production_order": production_order,
+            "serial_number": serial_number,
+            "model_name": str(st.session_state.get("product_model", "")),
+            "line": str(st.session_state.get("line_name", "")),
+            "operation_mode": operation_mode,
+            "source": "core_v19",
+            "result_left": str(res.get("defect_esq", "")),
+            "result_right": str(res.get("defect_dir", "")),
+            "final_result": str(res.get("defect_type", "")),
+            "confidence_left": f"{float(res.get('p_pres_esq', 0.0)):.6f}",
+            "confidence_right": f"{float(res.get('p_pres_dir', 0.0)):.6f}",
+            "image_path": img_path,
+            "xml_path": xml_path_str,
+            "mes_status": mes_status,
+        })
+    except Exception as e:
+        st.session_state["core_v19_last_error"] = f"Falha MES/rastreabilidade: {e}"
+
+
 IMG_SIZE = (224, 224)
 DEFAULT_THRESH_PRESENTE = 0.80
 DEFAULT_NORMALIZE_LAB = True
@@ -536,7 +919,7 @@ def ss_init():
     if "serial_lockout_s" not in ss: ss.serial_lockout_s = 0.35
     if "serial_high_since" not in ss: ss.serial_high_since = 0.0
     if "serial_low_since" not in ss: ss.serial_low_since = 0.0
-    if "serial_rearm_ms" not in ss: ss.serial_rearm_ms = 180
+    if "serial_rearm_ms" not in ss: ss.serial_rearm_ms = 800
     if "serial_cycle_fired" not in ss: ss.serial_cycle_fired = False
 
 
@@ -581,6 +964,10 @@ def ss_init():
     if "last_result" not in ss: ss.last_result = None
     if "last_error" not in ss: ss.last_error = None
     if "last_warning" not in ss: ss.last_warning = None
+    if "external_core_enabled" not in ss: ss.external_core_enabled = True
+    if "core_v19_last_cycle" not in ss: ss.core_v19_last_cycle = 0
+    if "core_v19_proc" not in ss: ss.core_v19_proc = None
+    if "core_v19_last_error" not in ss: ss.core_v19_last_error = ""
 
 ss_init()
 
@@ -1044,6 +1431,9 @@ def init_session():
     st.session_state.setdefault("upload_test_frame", None)
     st.session_state.setdefault("upload_test_name", "")
     st.session_state.setdefault("upload_test_count_kpi", False)
+
+    # CORE v19 externo: não sincronizar resultado antigo antes de iniciar o processo nesta sessão.
+    st.session_state.setdefault("core_v19_started_this_session", False)
 
     # evidências / auditoria
     st.session_state.setdefault("evidence_auto_enabled", True)
@@ -2184,6 +2574,198 @@ def crop_roi_percent(frame_bgr: np.ndarray, x0p, x1p, y0p, y1p) -> np.ndarray:
 
     return frame_bgr[y0:y1, x0:x1].copy()
 
+
+
+# ==========================================================
+# V19 FINAL V4 — Auto ROI industrial isolado
+# Uso correto: parar CORE v19, deixar a última imagem OK na tela,
+# executar 1x em modo Engenharia e salvar config_molas.json.
+# ==========================================================
+def _get_frame_for_roi_autocenter() -> np.ndarray | None:
+    """Retorna a imagem já exibida pelo CORE/UI para calibrar ROI sem abrir câmera na UI."""
+    for key in ("display_frame", "last_frame", "frozen_frame", "live_frame"):
+        fr = st.session_state.get(key)
+        if isinstance(fr, np.ndarray) and fr.size > 0:
+            return fr.copy()
+    return None
+
+
+def _foreground_centroid_in_roi(roi_bgr: np.ndarray) -> tuple[float, float, float] | None:
+    """Estima o centro visual da mola/metal dentro do ROI.
+
+    Usa limiarização inversa para separar as regiões metálicas/escurecidas
+    do plástico branco, com filtros morfológicos para reduzir ruído.
+    Retorna (cx, cy, area_ratio) em pixels do ROI.
+    """
+    if roi_bgr is None or roi_bgr.size == 0:
+        return None
+    h, w = roi_bgr.shape[:2]
+    if h < 20 or w < 20:
+        return None
+
+    gray = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    try:
+        _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    except Exception:
+        return None
+
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    n, labels_cc, stats, cent = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n <= 1:
+        return None
+
+    min_area = max(80, int(0.015 * h * w))
+    candidates = []
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= min_area:
+            x = int(stats[i, cv2.CC_STAT_LEFT])
+            y = int(stats[i, cv2.CC_STAT_TOP])
+            ww = int(stats[i, cv2.CC_STAT_WIDTH])
+            hh = int(stats[i, cv2.CC_STAT_HEIGHT])
+            cx, cy = cent[i]
+            # Prioriza massa metálica grande e próxima do centro do ROI.
+            score = area - 0.15 * abs(cx - (w / 2.0)) * h
+            candidates.append((score, area, cx, cy, x, y, ww, hh))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True, key=lambda t: t[0])
+    _, area, cx, cy, *_ = candidates[0]
+    return float(cx), float(cy), float(area) / float(h * w)
+
+
+def auto_center_one_roi_v19(frame_bgr: np.ndarray, prefix: str, move_y: bool = False, max_shift_pct: int = 8) -> tuple[bool, str]:
+    """Centraliza automaticamente um ROI mantendo o tamanho atual da janela."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False, "sem frame"
+
+    h, w = frame_bgr.shape[:2]
+    kx0, kx1, ky0, ky1 = f"{prefix}_x0", f"{prefix}_x1", f"{prefix}_y0", f"{prefix}_y1"
+    x0p = int(st.session_state.get(kx0, 0)); x1p = int(st.session_state.get(kx1, 100))
+    y0p = int(st.session_state.get(ky0, 0)); y1p = int(st.session_state.get(ky1, 100))
+
+    x0 = int(clamp01(x0p / 100.0) * w); x1 = int(clamp01(x1p / 100.0) * w)
+    y0 = int(clamp01(y0p / 100.0) * h); y1 = int(clamp01(y1p / 100.0) * h)
+    x0, x1 = sorted([x0, x1]); y0, y1 = sorted([y0, y1])
+    roi_w, roi_h = x1 - x0, y1 - y0
+    if roi_w < 20 or roi_h < 20:
+        return False, "ROI muito pequeno"
+
+    roi = frame_bgr[y0:y1, x0:x1].copy()
+    c = _foreground_centroid_in_roi(roi)
+    if c is None:
+        return False, "centro não encontrado"
+    cx, cy, area_ratio = c
+
+    desired_x0 = int(round((x0 + cx) - (roi_w / 2.0)))
+    shift_px = desired_x0 - x0
+    max_shift_px = int(round((max_shift_pct / 100.0) * w))
+    shift_px = max(-max_shift_px, min(max_shift_px, shift_px))
+    new_x0 = max(0, min(w - roi_w, x0 + shift_px))
+    new_x1 = new_x0 + roi_w
+
+    new_y0, new_y1 = y0, y1
+    shift_y_px = 0
+    if move_y:
+        desired_y0 = int(round((y0 + cy) - (roi_h / 2.0)))
+        shift_y_px = desired_y0 - y0
+        max_shift_y_px = int(round((max_shift_pct / 100.0) * h))
+        shift_y_px = max(-max_shift_y_px, min(max_shift_y_px, shift_y_px))
+        new_y0 = max(0, min(h - roi_h, y0 + shift_y_px))
+        new_y1 = new_y0 + roi_h
+
+    st.session_state[kx0] = int(round(new_x0 / w * 100.0))
+    st.session_state[kx1] = int(round(new_x1 / w * 100.0))
+    st.session_state[ky0] = int(round(new_y0 / h * 100.0))
+    st.session_state[ky1] = int(round(new_y1 / h * 100.0))
+
+    return True, f"dx={shift_px}px dy={shift_y_px}px área={area_ratio:.2f}"
+
+
+def auto_center_rois_v19_from_current_frame(move_y: bool = False) -> tuple[bool, str]:
+    fr = _get_frame_for_roi_autocenter()
+    if fr is None:
+        return False, "Sem imagem disponível. Faça uma inspeção OK, pare o CORE e tente novamente."
+    ok_e, msg_e = auto_center_one_roi_v19(fr, "roi_esq", move_y=move_y)
+    ok_d, msg_d = auto_center_one_roi_v19(fr, "roi_dir", move_y=move_y)
+    return bool(ok_e or ok_d), f"ESQ: {msg_e} | DIR: {msg_d}"
+
+
+def save_current_roi_config_for_v19() -> None:
+    """Salva configuração em dois locais: config global lido pelo CORE e config do modelo."""
+    payload = collect_config_from_session()
+    save_json(CONFIG_PATH, payload)  # arquivo usado pelo core externo
+    try:
+        mk = st.session_state.get("selected_model_key", "MODELO_PADRAO")
+        save_json(model_config_path(mk), payload)
+    except Exception:
+        pass
+
+
+def ensure_roi_session_loaded_v19() -> None:
+    """Garante que os sliders de ROI nunca iniciem zerados.
+
+    FIX v7: esta função NÃO chama apply_config_to_session(), porque no modo
+    Engenharia os sliders de threshold já foram instanciados pelo Streamlit.
+    Alterar st.session_state['threshold_presente'] depois disso gera:
+    StreamlitAPIException: cannot be modified after widget instantiated.
+
+    Aqui carregamos/aplicamos SOMENTE as chaves de ROI.
+    """
+    keys = [
+        "roi_esq_x0", "roi_esq_x1", "roi_esq_y0", "roi_esq_y1",
+        "roi_dir_x0", "roi_dir_x1", "roi_dir_y0", "roi_dir_y1",
+    ]
+
+    def _invalid(prefix: str, side: str) -> bool:
+        defaults = DEFAULT_ROI[side]
+        x0 = int(st.session_state.get(f"{prefix}_x0", defaults["x0"]))
+        x1 = int(st.session_state.get(f"{prefix}_x1", defaults["x1"]))
+        y0 = int(st.session_state.get(f"{prefix}_y0", defaults["y0"]))
+        y1 = int(st.session_state.get(f"{prefix}_y1", defaults["y1"]))
+        return (x1 - x0) < 5 or (y1 - y0) < 5
+
+    def _apply_roi_only_from_cfg(cfg: dict) -> None:
+        roi = (cfg or {}).get("roi", {}) or {}
+        esq = roi.get("ESQ", {}) or DEFAULT_ROI["ESQ"]
+        dirr = roi.get("DIR", {}) or DEFAULT_ROI["DIR"]
+        st.session_state["roi_esq_x0"] = int(esq.get("x0", DEFAULT_ROI["ESQ"]["x0"]))
+        st.session_state["roi_esq_x1"] = int(esq.get("x1", DEFAULT_ROI["ESQ"]["x1"]))
+        st.session_state["roi_esq_y0"] = int(esq.get("y0", DEFAULT_ROI["ESQ"]["y0"]))
+        st.session_state["roi_esq_y1"] = int(esq.get("y1", DEFAULT_ROI["ESQ"]["y1"]))
+        st.session_state["roi_dir_x0"] = int(dirr.get("x0", DEFAULT_ROI["DIR"]["x0"]))
+        st.session_state["roi_dir_x1"] = int(dirr.get("x1", DEFAULT_ROI["DIR"]["x1"]))
+        st.session_state["roi_dir_y0"] = int(dirr.get("y0", DEFAULT_ROI["DIR"]["y0"]))
+        st.session_state["roi_dir_y1"] = int(dirr.get("y1", DEFAULT_ROI["DIR"]["y1"]))
+
+    missing = any(k not in st.session_state for k in keys)
+    invalid = False
+    if not missing:
+        invalid = _invalid("roi_esq", "ESQ") or _invalid("roi_dir", "DIR")
+
+    if missing or invalid:
+        cfg = get_effective_config(st.session_state.get("selected_model_key", "MODELO_PADRAO"))
+        if not cfg:
+            cfg = {"roi": DEFAULT_ROI}
+        _apply_roi_only_from_cfg(cfg)
+
+    # Última proteção: se mesmo assim vier inválido, volta para ROI padrão.
+    if _invalid("roi_esq", "ESQ"):
+        st.session_state["roi_esq_x0"] = DEFAULT_ROI["ESQ"]["x0"]
+        st.session_state["roi_esq_x1"] = DEFAULT_ROI["ESQ"]["x1"]
+        st.session_state["roi_esq_y0"] = DEFAULT_ROI["ESQ"]["y0"]
+        st.session_state["roi_esq_y1"] = DEFAULT_ROI["ESQ"]["y1"]
+    if _invalid("roi_dir", "DIR"):
+        st.session_state["roi_dir_x0"] = DEFAULT_ROI["DIR"]["x0"]
+        st.session_state["roi_dir_x1"] = DEFAULT_ROI["DIR"]["x1"]
+        st.session_state["roi_dir_y0"] = DEFAULT_ROI["DIR"]["y0"]
+        st.session_state["roi_dir_y1"] = DEFAULT_ROI["DIR"]["y1"]
+
 def equalize_lab_bgr(img_bgr: np.ndarray) -> np.ndarray:
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
@@ -2988,7 +3570,7 @@ def generate_audit_report_files() -> tuple[Path, Path]:
             fig.text(0.07, y, txt, fontsize=size, fontweight=weight, color=color, va='top', ha='left')
             y -= step
 
-        line('SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode', size=18, weight='bold', step=0.035)
+        line('SVC Industrial – Computer Vision System for Spring Inspection', size=18, weight='bold', step=0.035)
         line('Relatório de Auditoria', size=14, weight='bold', step=0.032)
         line(f"Emitido em: {snapshot['generated_at']}", size=10)
         line(f"Período: {snapshot['period_start']} até {snapshot['generated_at']}", size=10)
@@ -3033,7 +3615,7 @@ def generate_audit_report_files() -> tuple[Path, Path]:
                 ax = fig.add_axes([0.06, 0.08, 0.88, 0.84])
                 ax.imshow(img)
                 ax.axis('off')
-                fig.text(0.07, 0.96, 'SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode', fontsize=16, fontweight='bold', va='top')
+                fig.text(0.07, 0.96, 'SVC Industrial – Computer Vision System for Spring Inspection', fontsize=16, fontweight='bold', va='top')
                 fig.text(0.07, 0.93, 'Relatório de Auditoria — Gráfico', fontsize=12, va='top')
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close(fig)
@@ -3317,10 +3899,10 @@ def check_auto_report_schedule() -> None:
 # ==========================================================
 # STREAMLIT APP
 # ==========================================================
-st.set_page_config(page_title="SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode", layout="wide")
+st.set_page_config(page_title="SVC Industrial – Computer Vision System for Spring Inspection", layout="wide")
 st.markdown("""
 <div class="app-title-fixed">
-    SVC – Computer Vision System for Spring Inspection — DUAL Inspection Mode
+    SVC Industrial – Computer Vision System for Spring Inspection
 </div>
 """, unsafe_allow_html=True)
 # ==========================================================
@@ -3374,11 +3956,20 @@ else:
 # Auto-refresh leve (somente se Serial ON e pacote disponível)
 # Mantém o consumo da serial vivo também durante o fluxo do sensor.
 if (
-    ((st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True)) or st.session_state.get("auto_reports_enabled", False))
+    ((st.session_state.get("external_core_enabled", True)) or (st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True)) or st.session_state.get("auto_reports_enabled", False))
     and HAS_AUTOREFRESH
     and (not st.session_state.get("manual_test_request", False))
 ):
-    if st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True):
+    if st.session_state.get("external_core_enabled", True):
+        # V19: o core externo trabalha sozinho. A tela só consulta JSON.
+        # Intervalo maior evita o efeito de página esbranquiçada por rerun muito frequente.
+        try:
+            _hb_for_refresh = core_v19_heartbeat()
+            _hb_status = str(_hb_for_refresh.get("status", ""))
+        except Exception:
+            _hb_status = ""
+        interval = 900 if _hb_status == "processing" else 3000
+    elif st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True):
         # IMPORTANTE: não agendar auto-rerun enquanto uma captura/inferência estiver em andamento.
         # O rerun automático pode interromper o fluxo do sensor no meio do processamento e deixar
         # o estado preso em "firing...(sensor)" com capture_busy=True.
@@ -3403,7 +3994,10 @@ if time.time() - st.session_state.last_auto_check > 30:
     check_auto_report_schedule()
     st.session_state.last_auto_check = time.time()
 
-poll_serial_events_and_maybe_trigger()
+if st.session_state.get("external_core_enabled", True):
+    sync_core_v19_result_to_ui()
+else:
+    poll_serial_events_and_maybe_trigger()
 check_auto_report_schedule()
 
 # ==========================================================
@@ -3482,16 +4076,16 @@ st.markdown("""<style>
 
 /* ================================ */
             
-.roi-box { background-color: #f4f6f8; border: 1px solid #d0d4d9; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
-.roi-title { font-weight: 600; font-size: 16px; margin-bottom: 4px; }
-.roi-caption { font-size: 12px; color: #6b7280; margin-bottom: 10px; }
+.roi-box { background-color: #f4f6f8; border: 1px solid #d0d4d9; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.roi-title { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.roi-caption { font-size: 11px; color: #6b7280; margin-bottom: 6px; }
 .roi-frame { border-radius: 6px; padding: 6px; }
 .roi-ok { border: 2px solid #22c55e; }
 .roi-ng { border: 2px solid #dc2626; }
 .roi-bar {
-    height: 44px; border-radius: 6px; margin: 8px 0 12px 0;
+    height: 34px; border-radius: 6px; margin: 5px 0 7px 0;
     border: 1px solid #d0d4d9; display: flex; align-items: center; justify-content: center;
-    font-size: 35px; font-weight: 700; letter-spacing: 1px; color: #ffffff;
+    font-size: 24px; font-weight: 700; letter-spacing: 1px; color: #ffffff;
     text-transform: uppercase; line-height: 1;
 }
 .roi-bar-ok { background: #22c55e; }
@@ -3499,8 +4093,81 @@ st.markdown("""<style>
 .result-box { border-radius: 10px; padding: 16px; margin-top: 10px; margin-bottom: 14px; text-align: center; }
 .result-ok { background-color: #dcfce7; border: 2px solid #22c55e; color: #166534; }
 .result-ng { background-color: #fee2e2; border: 2px solid #dc2626; color: #7f1d1d; }
-.result-text { font-size: 42px; font-weight: 800; letter-spacing: 1px; }
+.result-text { font-size: 30px; font-weight: 800; letter-spacing: 1px; }
 .result-details { font-size: 14px; margin-top: 8px; }
+
+/* ================================
+   RESULTADO INDUSTRIAL / ANDON v8
+================================ */
+.andon-result-card {
+    border: 3px solid;
+    border-radius: 16px;
+    padding: 18px 20px 16px 20px;
+    margin-top: 12px;
+    margin-bottom: 16px;
+    text-align: center;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.10);
+}
+.andon-topline {
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.8px;
+    opacity: 0.88;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+.andon-title {
+    font-size: 38px;
+    line-height: 1.04;
+    font-weight: 1000;
+    letter-spacing: 0.4px;
+    margin: 4px 0 16px 0;
+    text-transform: uppercase;
+}
+.andon-sides {
+    display:flex;
+    justify-content:center;
+    gap: 30px;
+    align-items:stretch;
+    margin-bottom: 12px;
+}
+.andon-side {
+    min-width: 132px;
+}
+.andon-side-title {
+    font-size: 18px;
+    font-weight: 900;
+    margin-bottom: 6px;
+}
+.andon-side-pill {
+    color:white;
+    padding: 10px 16px;
+    border-radius: 10px;
+    min-width: 120px;
+    display:inline-block;
+    font-size: 20px;
+    line-height: 1;
+    font-weight: 1000;
+    text-transform: uppercase;
+    box-shadow: inset 0 -1px 0 rgba(0,0,0,0.12);
+}
+.andon-details {
+    margin-top: 8px;
+    font-size: 13px;
+    line-height: 1.45;
+    font-weight: 700;
+    opacity: 0.96;
+    text-align: center;
+}
+@media (max-width: 1400px) {
+    .andon-title { font-size: 34px; }
+    .andon-side-pill { font-size: 18px; min-width: 110px; }
+    .andon-details { font-size: 12px; }
+}
+
 .kpi-grid{ display:grid; grid-template-columns:repeat(3, minmax(120px, 1fr)); gap:8px; max-width: 580px; width: 100%; }
 .kpi-card{ background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:6px 8px; min-height:52px; }
 .kpi-label { font-size:12px; color:#6b7280; margin-bottom:0px; line-height: 1.05; }
@@ -3618,11 +4285,10 @@ with st.sidebar:
 
     
     with st.expander("ℹ️ Sobre o Sistema", expanded=False):
-        st.markdown("### Sistema: SVC – Computer Vision System for Spring Inspection")
-        st.markdown("- **Versão:** v1.1.0")
-        st.markdown("- **Status:** Industrial ROI Calibration")
-        st.markdown("- **Release:** 30/03/2026")
-        st.markdown("- **Empresa:** Salcomp")
+        st.markdown("### Sistema: SVC Industrial – Computer Vision System for Spring Inspection")
+        st.markdown("- **Versão:** v2.0 Stable")
+        st.markdown("- **Status:** Production-Oriented Industrial Platform")
+        st.markdown("- **Release:** 08/05/2026")
         st.markdown("- **Engenheiro Responsável:** André Gama de Matos")
         st.markdown("- **Orientador Acadêmico:** Prof. Dr. Carlos Maurício Seródio Figueiredo")
         st.markdown("- **Co-Orientador Acadêmico:** Prof. Dr. Jozias Parente de Oliveira")
@@ -3639,7 +4305,50 @@ with st.sidebar:
         st.markdown(f"- **TensorFlow:** {tf.__version__}")
 
 
-    with st.expander("🛠 Debug Serial", expanded=False):
+    with st.expander("🧠 Motor v19 anti-travamento", expanded=True):
+        st.caption("Produção usa o core v1.6.5 externo: sensor → captura → inferência → JSON. A tela apenas exibe e registra.")
+        st.session_state["external_core_enabled"] = st.checkbox(
+            "Usar motor externo v19",
+            value=bool(st.session_state.get("external_core_enabled", True)),
+            help="Deixe ligado em produção. Desliga apenas se quiser usar o fluxo antigo da v18 para diagnóstico."
+        )
+        hb = core_v19_heartbeat()
+        alive = core_v19_process_alive()
+        st.caption(f"Processo iniciado pela tela: {'ON' if alive else 'OFF'}")
+        st.caption(f"Heartbeat: {hb.get('status','sem heartbeat')} | ciclo={hb.get('cycle','-')} | {hb.get('timestamp','')}")
+        cols_core = st.columns(2)
+        with cols_core[0]:
+            if st.button("▶ Iniciar CORE v19", width="stretch"):
+                try:
+                    # evita disputa pela câmera com a visualização antiga.
+                    # No v19, a câmera pertence ao CORE externo, não à UI.
+                    safe_release_cap()
+                    st.session_state["camera_on"] = False
+                    st.session_state["cap"] = None
+                    st.session_state["display_frame"] = None
+                    st.session_state["last_frame"] = None
+                except Exception:
+                    pass
+                ok_core, msg_core = core_v19_start_process()
+                if ok_core:
+                    st.success(msg_core)
+                else:
+                    st.error(msg_core)
+        with cols_core[1]:
+            if st.button("■ Parar CORE v19", width="stretch"):
+                ok_core, msg_core = core_v19_stop_process()
+                if ok_core:
+                    st.warning(msg_core)
+                else:
+                    st.error(msg_core)
+        if CORE_LAST_RESULT_JSON.exists():
+            st.caption(f"last_result.json: {CORE_LAST_RESULT_JSON}")
+        if st.session_state.get("core_v19_last_error"):
+            st.warning(st.session_state.get("core_v19_last_error"))
+        st.info("Em produção: não use Serial ON da v18. Use o botão Iniciar CORE v19 acima.")
+
+
+    with st.expander("🛠 Debug Serial legado v18", expanded=False):
             st.caption("Painel de diagnóstico da comunicação Serial e gatilho do sensor.")
             st.divider()
             st.header("Serial (Arduino)")
@@ -4087,7 +4796,8 @@ if is_eng:
         p = model_config_path(mk)
         payload = collect_config_from_session()
         save_json(p, payload)
-        st.sidebar.success(f"Salvo: {p.name}")
+        save_json(CONFIG_PATH, payload)
+        st.sidebar.success(f"Salvo: {p.name} e config_molas.json")
 
     if st.sidebar.button("↩️ Recarregar config deste modelo"):
         mk = st.session_state.get("selected_model_key", "MODELO_PADRAO")
@@ -4107,14 +4817,28 @@ use_dshow = st.sidebar.checkbox("Usar DirectShow (Windows)", value=True)
 
 st.session_state["use_dshow"] = bool(use_dshow)
 
-col_cam_btns = st.sidebar.columns(2)
-with col_cam_btns[0]:
-    btn_cam_on = st.sidebar.button("📷 Ligar", width='stretch')
-with col_cam_btns[1]:
-    btn_cam_off = st.sidebar.button("⛔ Desligar", width='stretch')
+# No modo v19 externo, a câmera deve ficar sob controle exclusivo do core.
+# A UI exibe a última imagem salva pelo core para evitar disputa de câmera/travamento.
+if st.session_state.get("external_core_enabled", True):
+    if st.session_state.get("camera_on") or st.session_state.get("cap") is not None:
+        try:
+            safe_release_cap()
+        except Exception:
+            pass
+    st.sidebar.info("Modo v19 ativo: não ligue a câmera aqui. Use apenas ▶ Iniciar CORE v19.")
+    btn_cam_on = False
+    btn_cam_off = False
+    btn_capture = False
+    btn_live = False
+else:
+    col_cam_btns = st.sidebar.columns(2)
+    with col_cam_btns[0]:
+        btn_cam_on = st.sidebar.button("📷 Ligar", width='stretch')
+    with col_cam_btns[1]:
+        btn_cam_off = st.sidebar.button("⛔ Desligar", width='stretch')
 
-btn_capture = st.sidebar.button("📸 Capturar + Inferir (DUAL)", type="primary", width='stretch')
-btn_live = st.sidebar.button("▶️ LIVE", width='stretch')
+    btn_capture = st.sidebar.button("📸 Capturar + Inferir (DUAL)", type="primary", width='stretch')
+    btn_live = st.sidebar.button("▶️ LIVE", width='stretch')
 
 st.session_state["cam_index_last"] = int(cam_index)
 
@@ -4406,8 +5130,148 @@ if is_eng:
               value=int(st.session_state.get("temporal_delay_ms", DEFAULT_TEMPORAL_DELAY_MS)),
               step=5, key="temporal_delay_ms")
 
-    st.sidebar.subheader("ROI (%)")
-    # (se quiser sliders de ROI aqui, você pode adicionar depois)
+    st.sidebar.subheader("ROI (%) — centralização")
+    ensure_roi_session_loaded_v19()
+
+    with st.sidebar.expander("🎯 Auto ROI industrial", expanded=True):
+        st.caption("Use somente com o CORE parado. O ajuste roda 1x usando a última imagem exibida e salva no config_molas.json.")
+        _core_alive = core_v19_process_alive()
+        if _core_alive:
+            st.warning("Pare o CORE v19 antes de calibrar o ROI.")
+
+        st.checkbox(
+            "Auto ajuste também no eixo Y (vertical)",
+            value=False,
+            key="roi_auto_move_y_v19",
+            help="Deixe desligado no primeiro ajuste. Ligue só se a mola também estiver alta/baixa no recorte."
+        )
+
+        col_auto1, col_auto2 = st.columns(2)
+        with col_auto1:
+            if st.button("🎯 Auto centralizar ROI", use_container_width=True, disabled=_core_alive):
+                try:
+                    ok_auto, msg_auto = auto_center_rois_v19_from_current_frame(
+                        move_y=bool(st.session_state.get("roi_auto_move_y_v19", False))
+                    )
+                    st.session_state["roi_auto_last_msg_v19"] = msg_auto
+                    if ok_auto:
+                        st.success("ROI auto centralizado. Confira a imagem e salve.")
+                    else:
+                        st.warning(msg_auto)
+                except Exception as e:
+                    st.session_state["roi_auto_last_msg_v19"] = f"erro: {e}"
+                    st.error(f"Falha no Auto ROI: {e}")
+        with col_auto2:
+            if st.button("💾 Auto + salvar", use_container_width=True, disabled=_core_alive):
+                try:
+                    ok_auto, msg_auto = auto_center_rois_v19_from_current_frame(
+                        move_y=bool(st.session_state.get("roi_auto_move_y_v19", False))
+                    )
+                    st.session_state["roi_auto_last_msg_v19"] = msg_auto
+                    if ok_auto:
+                        save_current_roi_config_for_v19()
+                        st.success("ROI auto ajustado e salvo no config_molas.json ✅")
+                        st.info("Reinicie o CORE v19 para ele carregar o novo ROI.")
+                    else:
+                        st.warning(msg_auto)
+                except Exception as e:
+                    st.session_state["roi_auto_last_msg_v19"] = f"erro: {e}"
+                    st.error(f"Falha no Auto+salvar: {e}")
+
+        if st.session_state.get("roi_auto_last_msg_v19"):
+            st.caption(f"Último auto ajuste: {st.session_state.get('roi_auto_last_msg_v19')}")
+
+        c_save1, c_save2 = st.columns(2)
+        with c_save1:
+            if st.button("💾 Salvar ROI atual", use_container_width=True, disabled=_core_alive):
+                save_current_roi_config_for_v19()
+                st.success("ROI salvo no config_molas.json ✅")
+                st.info("Reinicie o CORE v19 para aplicar.")
+        with c_save2:
+            if st.button("↩️ ROI padrão", use_container_width=True, disabled=_core_alive):
+                st.session_state["roi_esq_x0"] = DEFAULT_ROI["ESQ"]["x0"]
+                st.session_state["roi_esq_x1"] = DEFAULT_ROI["ESQ"]["x1"]
+                st.session_state["roi_esq_y0"] = DEFAULT_ROI["ESQ"]["y0"]
+                st.session_state["roi_esq_y1"] = DEFAULT_ROI["ESQ"]["y1"]
+                st.session_state["roi_dir_x0"] = DEFAULT_ROI["DIR"]["x0"]
+                st.session_state["roi_dir_x1"] = DEFAULT_ROI["DIR"]["x1"]
+                st.session_state["roi_dir_y0"] = DEFAULT_ROI["DIR"]["y0"]
+                st.session_state["roi_dir_y1"] = DEFAULT_ROI["DIR"]["y1"]
+                save_current_roi_config_for_v19()
+                st.success("ROI padrão restaurado e salvo ✅")
+
+        st.caption(
+            f"ESQ X {st.session_state.get('roi_esq_x0')}-{st.session_state.get('roi_esq_x1')} / "
+            f"Y {st.session_state.get('roi_esq_y0')}-{st.session_state.get('roi_esq_y1')} | "
+            f"DIR X {st.session_state.get('roi_dir_x0')}-{st.session_state.get('roi_dir_x1')} / "
+            f"Y {st.session_state.get('roi_dir_y0')}-{st.session_state.get('roi_dir_y1')}"
+        )
+
+
+
+    with st.sidebar.expander("✏️ Ajuste manual fino do ROI", expanded=True):
+        st.caption("Use depois do Auto ROI. Para mover sem deformar, altere X0 e X1 juntos, ou Y0 e Y1 juntos. Salve e reinicie o CORE v19.")
+        _core_alive_manual = core_v19_process_alive()
+        if _core_alive_manual:
+            st.warning("Pare o CORE v19 antes de alterar/salvar o ROI manual.")
+
+        st.markdown("**Mola ESQ**")
+        col_esq_shift1, col_esq_shift2 = st.columns(2)
+        with col_esq_shift1:
+            esq_dx = st.number_input("ESQ deslocar X", min_value=-20, max_value=20, value=0, step=1, key="roi_esq_shift_x_v5", disabled=_core_alive_manual)
+        with col_esq_shift2:
+            esq_dy = st.number_input("ESQ deslocar Y", min_value=-20, max_value=20, value=0, step=1, key="roi_esq_shift_y_v5", disabled=_core_alive_manual)
+        if st.button("Aplicar deslocamento ESQ", use_container_width=True, disabled=_core_alive_manual):
+            st.session_state["roi_esq_x0"] = int(max(0, min(100, int(st.session_state.get("roi_esq_x0", DEFAULT_ROI["ESQ"]["x0"])) + int(esq_dx))))
+            st.session_state["roi_esq_x1"] = int(max(0, min(100, int(st.session_state.get("roi_esq_x1", DEFAULT_ROI["ESQ"]["x1"])) + int(esq_dx))))
+            st.session_state["roi_esq_y0"] = int(max(0, min(100, int(st.session_state.get("roi_esq_y0", DEFAULT_ROI["ESQ"]["y0"])) + int(esq_dy))))
+            st.session_state["roi_esq_y1"] = int(max(0, min(100, int(st.session_state.get("roi_esq_y1", DEFAULT_ROI["ESQ"]["y1"])) + int(esq_dy))))
+            st.session_state["roi_esq_shift_x_v5"] = 0
+            st.session_state["roi_esq_shift_y_v5"] = 0
+            st.rerun()
+
+        st.slider("ESQ X0", 0, 100, key="roi_esq_x0", disabled=_core_alive_manual)
+        st.slider("ESQ X1", 0, 100, key="roi_esq_x1", disabled=_core_alive_manual)
+        st.slider("ESQ Y0", 0, 100, key="roi_esq_y0", disabled=_core_alive_manual)
+        st.slider("ESQ Y1", 0, 100, key="roi_esq_y1", disabled=_core_alive_manual)
+
+        st.markdown("**Mola DIR**")
+        col_dir_shift1, col_dir_shift2 = st.columns(2)
+        with col_dir_shift1:
+            dir_dx = st.number_input("DIR deslocar X", min_value=-20, max_value=20, value=0, step=1, key="roi_dir_shift_x_v5", disabled=_core_alive_manual)
+        with col_dir_shift2:
+            dir_dy = st.number_input("DIR deslocar Y", min_value=-20, max_value=20, value=0, step=1, key="roi_dir_shift_y_v5", disabled=_core_alive_manual)
+        if st.button("Aplicar deslocamento DIR", use_container_width=True, disabled=_core_alive_manual):
+            st.session_state["roi_dir_x0"] = int(max(0, min(100, int(st.session_state.get("roi_dir_x0", DEFAULT_ROI["DIR"]["x0"])) + int(dir_dx))))
+            st.session_state["roi_dir_x1"] = int(max(0, min(100, int(st.session_state.get("roi_dir_x1", DEFAULT_ROI["DIR"]["x1"])) + int(dir_dx))))
+            st.session_state["roi_dir_y0"] = int(max(0, min(100, int(st.session_state.get("roi_dir_y0", DEFAULT_ROI["DIR"]["y0"])) + int(dir_dy))))
+            st.session_state["roi_dir_y1"] = int(max(0, min(100, int(st.session_state.get("roi_dir_y1", DEFAULT_ROI["DIR"]["y1"])) + int(dir_dy))))
+            st.session_state["roi_dir_shift_x_v5"] = 0
+            st.session_state["roi_dir_shift_y_v5"] = 0
+            st.rerun()
+
+        st.slider("DIR X0", 0, 100, key="roi_dir_x0", disabled=_core_alive_manual)
+        st.slider("DIR X1", 0, 100, key="roi_dir_x1", disabled=_core_alive_manual)
+        st.slider("DIR Y0", 0, 100, key="roi_dir_y0", disabled=_core_alive_manual)
+        st.slider("DIR Y1", 0, 100, key="roi_dir_y1", disabled=_core_alive_manual)
+
+        col_manual_save1, col_manual_save2 = st.columns(2)
+        with col_manual_save1:
+            if st.button("💾 Salvar ajuste fino", use_container_width=True, disabled=_core_alive_manual):
+                save_current_roi_config_for_v19()
+                st.success("Ajuste manual salvo no config_molas.json ✅")
+                st.info("Reinicie o CORE v19 para aplicar no motor.")
+        with col_manual_save2:
+            if st.button("🔄 Recarregar config", use_container_width=True, disabled=_core_alive_manual):
+                apply_config_to_session(get_effective_config(st.session_state.get("selected_model_key", "MODELO_PADRAO")))
+                st.rerun()
+
+        st.info(
+            f"Atual: ESQ X {st.session_state.get('roi_esq_x0')}-{st.session_state.get('roi_esq_x1')} / "
+            f"Y {st.session_state.get('roi_esq_y0')}-{st.session_state.get('roi_esq_y1')} | "
+            f"DIR X {st.session_state.get('roi_dir_x0')}-{st.session_state.get('roi_dir_x1')} / "
+            f"Y {st.session_state.get('roi_dir_y0')}-{st.session_state.get('roi_dir_y1')}"
+        )
 
     show_debug = st.sidebar.checkbox("Mostrar debug", value=False)
 
@@ -5258,7 +6122,8 @@ if st.session_state.get("manual_test_request", False):
 
 # Execução do sensor: borda -> pequeno settle -> enfileira o mesmo funil estável do TESTE 1x.
 if (
-    st.session_state.get("sensor_exec_request", False)
+    (not st.session_state.get("external_core_enabled", True))
+    and st.session_state.get("sensor_exec_request", False)
     and st.session_state.get("serial_on", False)
     and (not manual_override_active())
     and (not st.session_state.get("capture_busy", False))
@@ -5293,8 +6158,13 @@ if (
 # ==========================================================
 frame = None
 
+# No modo v19 externo, a câmera pertence ao CORE; a UI mostra a última imagem salva pelo motor.
+if st.session_state.get("external_core_enabled", True) and st.session_state.get("last_frame") is not None:
+    frame = st.session_state["last_frame"].copy()
+    st.session_state["live_frame"] = None
+
 # Se estiver em modo congelado (quando existir no app), respeita.
-if st.session_state.get("frozen", False) and st.session_state.get("frozen_frame") is not None:
+elif st.session_state.get("frozen", False) and st.session_state.get("frozen_frame") is not None:
     frame = st.session_state["frozen_frame"].copy()
     st.session_state["live_frame"] = None  # congelado não é "ao vivo"
 
@@ -5373,18 +6243,34 @@ if st.session_state.get("last_warning"):
 # ==========================================================
 # LAYOUT
 # ==========================================================
-colA, colB = st.columns([2.0, 1.3], gap="medium")
+colA, colB = st.columns([1.75, 1.05], gap="medium")
 
 with colA:
     with st.container(border=True):
         st.markdown("#### Visualização")
+        if st.session_state.get("external_core_enabled", True):
+            st.caption("Imagem exibida pelo CORE v19 externo. A câmera antiga da UI fica desligada para evitar conflito.")
         if frame is None:
             st.warning("Sem frame (ligue a câmera ou envie uma imagem no modo Engenharia).")
         else:
             upload_name = str(st.session_state.get("upload_test_name", "")).strip()
             if upload_name and not st.session_state.get("camera_on", False):
                 st.caption(f"Imagem de teste carregada: {upload_name}")
-            st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), width=800)
+            try:
+                frame_to_show = draw_roi_overlay(frame) if (is_eng and not core_v19_process_alive()) else frame
+            except Exception:
+                frame_to_show = frame
+
+            # v2.1-production-fast-visual:
+            # Mantém a imagem principal no Modo Operador para gerar confiança,
+            # mas reduz a resolução antes da conversão/renderização para diminuir overhead.
+            frame_to_show = prepare_main_frame_for_display(frame_to_show, engineering=is_eng)
+
+            st.image(
+                cv2.cvtColor(frame_to_show, cv2.COLOR_BGR2RGB),
+                use_container_width=True
+            )
+            
 
     st.markdown('<div class="compact-divider"></div>', unsafe_allow_html=True)
 
@@ -5394,15 +6280,19 @@ with colB:
     try:
         res = st.session_state.get("last_result")
 
-        if res is not None:
+        # v2.1-production-fast:
+        # ROIs visuais ficam disponíveis somente no Modo Engenharia.
+        # No Modo Operador, esta seção é omitida para reduzir redraw, conversão de imagem
+        # e carga de CPU durante produção em alta velocidade.
+        if res is not None and is_eng:
             cls_esq = "roi-ok" if res.get("ok_esq", False) else "roi-ng"
             cls_dir = "roi-ok" if res.get("ok_dir", False) else "roi-ng"
             bar_esq = "roi-bar-ok" if res.get("ok_esq", False) else "roi-bar-ng"
             bar_dir = "roi-bar-ok" if res.get("ok_dir", False) else "roi-bar-ng"
 
             st.markdown('<div class="roi-box">', unsafe_allow_html=True)
-            st.markdown('<div class="roi-title">ROIs das Molas</div>', unsafe_allow_html=True)
-            st.markdown('<div class="roi-caption">Recortes usados na inferência (ESQ e DIR).</div>', unsafe_allow_html=True)
+            st.markdown('<div class="roi-title">ROIs das Molas — Engenharia</div>', unsafe_allow_html=True)
+            st.markdown('<div class="roi-caption">Recortes usados na inferência (ESQ e DIR). Oculto no Modo Operador para melhor performance.</div>', unsafe_allow_html=True)
 
             c_esq, c_dir = st.columns(2, gap="small")
 
@@ -5410,9 +6300,22 @@ with colB:
                 st.markdown(f'<div class="roi-bar {bar_esq}">{"OK" if res.get("ok_esq", False) else "NG"}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="roi-frame {cls_esq}">', unsafe_allow_html=True)
                 st.markdown("**Mola ESQ (ROI)**")
-                roi_img = res.get("roi_esq", None)
+                roi_img = None
+                try:
+                    if is_eng and (not core_v19_process_alive()) and isinstance(frame, np.ndarray):
+                        roi_img = crop_roi_percent(
+                            frame,
+                            int(st.session_state.get("roi_esq_x0", DEFAULT_ROI["ESQ"]["x0"])),
+                            int(st.session_state.get("roi_esq_x1", DEFAULT_ROI["ESQ"]["x1"])),
+                            int(st.session_state.get("roi_esq_y0", DEFAULT_ROI["ESQ"]["y0"])),
+                            int(st.session_state.get("roi_esq_y1", DEFAULT_ROI["ESQ"]["y1"])),
+                        )
+                    else:
+                        roi_img = res.get("roi_esq", None)
+                except Exception:
+                    roi_img = res.get("roi_esq", None)
                 if roi_img is not None:
-                    st.image(cv2.cvtColor(roi_img, cv2.COLOR_BGR2RGB), width=190)
+                    st.image(cv2.cvtColor(roi_img, cv2.COLOR_BGR2RGB), width=155)
                 else:
                     st.caption("ROI ESQ indisponível.")
                 st.markdown("</div>", unsafe_allow_html=True)
@@ -5421,15 +6324,28 @@ with colB:
                 st.markdown(f'<div class="roi-bar {bar_dir}">{"OK" if res.get("ok_dir", False) else "NG"}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="roi-frame {cls_dir}">', unsafe_allow_html=True)
                 st.markdown("**Mola DIR (ROI)**")
-                roi_img = res.get("roi_dir", None)
+                roi_img = None
+                try:
+                    if is_eng and (not core_v19_process_alive()) and isinstance(frame, np.ndarray):
+                        roi_img = crop_roi_percent(
+                            frame,
+                            int(st.session_state.get("roi_dir_x0", DEFAULT_ROI["DIR"]["x0"])),
+                            int(st.session_state.get("roi_dir_x1", DEFAULT_ROI["DIR"]["x1"])),
+                            int(st.session_state.get("roi_dir_y0", DEFAULT_ROI["DIR"]["y0"])),
+                            int(st.session_state.get("roi_dir_y1", DEFAULT_ROI["DIR"]["y1"])),
+                        )
+                    else:
+                        roi_img = res.get("roi_dir", None)
+                except Exception:
+                    roi_img = res.get("roi_dir", None)
                 if roi_img is not None:
-                    st.image(cv2.cvtColor(roi_img, cv2.COLOR_BGR2RGB), width=190)
+                    st.image(cv2.cvtColor(roi_img, cv2.COLOR_BGR2RGB), width=155)
                 else:
                     st.caption("ROI DIR indisponível.")
                 st.markdown("</div>", unsafe_allow_html=True)
 
             st.markdown("</div>", unsafe_allow_html=True)
-        else:
+        elif res is None and is_eng:
             st.info("Ainda não foi feita uma inspeção (sem ROIs para mostrar).")
 
         if res is not None:
