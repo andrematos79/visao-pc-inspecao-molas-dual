@@ -125,8 +125,11 @@ def render_resultado_industrial(res: Optional[dict]) -> None:
     p_pres_dir = res.get("p_pres_dir", None)
     p_ng_esq = res.get("prob_ng_esq", None)
     p_ng_dir = res.get("prob_ng_dir", None)
-    thr_ng_ok = res.get("thr_ng_ok", None)
-    thr_ng_ng = res.get("thr_ng_ng", None)
+    thr_ng_ok_esq = res.get("thr_ng_ok_esq", res.get("thr_ng_ok", None))
+    thr_ng_ng_esq = res.get("thr_ng_ng_esq", res.get("thr_ng_ng", None))
+
+    thr_ng_ok_dir = res.get("thr_ng_ok_dir", res.get("thr_ng_ok", None))
+    thr_ng_ng_dir = res.get("thr_ng_ng_dir", res.get("thr_ng_ng", None))
     band_esq = res.get("decision_band_esq", "-")
     band_dir = res.get("decision_band_dir", "-")
     cycle = int(res.get("cycle", 0) or 0)
@@ -143,9 +146,11 @@ def render_resultado_industrial(res: Optional[dict]) -> None:
         details_esq += f" | p(NG)={_fmt(p_ng_esq)}"
     if p_ng_dir is not None:
         details_dir += f" | p(NG)={_fmt(p_ng_dir)}"
-    if thr_ng_ok is not None and thr_ng_ng is not None:
-        details_esq += f" | faixas={_fmt(thr_ng_ok)}/{_fmt(thr_ng_ng)}"
-        details_dir += f" | faixas={_fmt(thr_ng_ok)}/{_fmt(thr_ng_ng)}"
+    if thr_ng_ok_esq is not None and thr_ng_ng_esq is not None:
+        details_esq += f" | faixas={_fmt(thr_ng_ok_esq)}/{_fmt(thr_ng_ng_esq)}"
+
+    if thr_ng_ok_dir is not None and thr_ng_ng_dir is not None:
+        details_dir += f" | faixas={_fmt(thr_ng_ok_dir)}/{_fmt(thr_ng_ng_dir)}"
     if band_esq:
         details_esq += f" | banda={band_esq}"
     if band_dir:
@@ -877,10 +882,10 @@ def sync_core_v19_result_to_ui() -> None:
 
 IMG_SIZE = (224, 224)
 DEFAULT_THRESH_PRESENTE = 0.80
-DEFAULT_NORMALIZE_LAB = True
+DEFAULT_NORMALIZE_LAB = False
 DEFAULT_THRESH_PRESENTE = 0.50
-DEFAULT_THR_NG_OK = 0.45
-DEFAULT_THR_NG_NG = 0.60
+DEFAULT_THR_NG_OK = 0.75
+DEFAULT_THR_NG_NG = 0.90
 DEFAULT_TEMPORAL_SMOOTHING = True
 DEFAULT_TEMPORAL_N_FRAMES = 3
 DEFAULT_TEMPORAL_DELAY_MS = 25
@@ -888,7 +893,7 @@ DEFAULT_TEMPORAL_DELAY_MS = 25
 ENG_PIN = "1234"  # PIN DO MODO ENGENHARIA
 
 DEFAULT_ROI = {
-    "ESQ": {"x0": 8,  "x1": 35,  "y0": 10, "y1": 82},
+    "ESQ": {"x0": 8,  "x1": 35,  "y0": 10, "y1": 62},
     "DIR": {"x0": 74, "x1": 100, "y0": 17, "y1": 83},
 }
 
@@ -936,7 +941,7 @@ def ss_init():
     if "sensor_job_armed_ts" not in ss: ss.sensor_job_armed_ts = 0.0
     if "sensor_job_ready_at" not in ss: ss.sensor_job_ready_at = 0.0
 
-    if "sensor_settle_ms" not in ss: ss.sensor_settle_ms = 200
+    if "sensor_settle_ms" not in ss: ss.sensor_settle_ms = 900 #tempo de disparo do sensor
     if "capture_busy" not in ss: ss.capture_busy = False
     if "capture_busy_since" not in ss: ss.capture_busy_since = 0.0
     if "sensor_infer_running" not in ss: ss.sensor_infer_running = False
@@ -3968,7 +3973,7 @@ if (
             _hb_status = str(_hb_for_refresh.get("status", ""))
         except Exception:
             _hb_status = ""
-        interval = 900 if _hb_status == "processing" else 3000
+        interval = 10000 if _hb_status == "processing" else 3000
     elif st.session_state.get("serial_on", False) and st.session_state.get("serial_autorefresh", True):
         # IMPORTANTE: não agendar auto-rerun enquanto uma captura/inferência estiver em andamento.
         # O rerun automático pode interromper o fluxo do sensor no meio do processamento e deixar
@@ -6152,7 +6157,61 @@ if (
             st.rerun()
 
 # Execução via sensor_exec_request agora usa o mesmo funil estável do TESTE: Disparar 1x.
+# ==========================================================
+# ENGENHARIA — Captura direta de frame para calibração de ROI
+# ==========================================================
+if is_eng:
+    st.sidebar.markdown("### Engenharia - Câmera")
 
+    core_alive_eng = core_v19_process_alive()
+
+    if core_alive_eng:
+        st.sidebar.warning("Pare o CORE v19 para usar a câmera no modo Engenharia.")
+    else:
+        if st.sidebar.button("📷 Capturar frame para ROI", use_container_width=True):
+            try:
+                safe_release_cap()
+
+                backend = cv2.CAP_DSHOW if use_dshow else cv2.CAP_ANY
+                cap_tmp = cv2.VideoCapture(int(cam_index), backend)
+
+                cap_tmp.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                cap_tmp.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+                if not cap_tmp.isOpened():
+                    try:
+                        cap_tmp.release()
+                    except Exception:
+                        pass
+                    cap_tmp = cv2.VideoCapture(int(cam_index))
+
+                if not cap_tmp.isOpened():
+                    st.session_state["last_error"] = "Não consegui abrir a câmera no modo Engenharia."
+                else:
+                    frame_tmp = read_fresh_frame(
+                        cap_tmp,
+                        flush_grabs=6,
+                        sleep_ms=10,
+                        extra_reads=2
+                    )
+
+                    cap_tmp.release()
+
+                    if frame_tmp is None:
+                        st.session_state["last_error"] = "Câmera abriu, mas não retornou frame."
+                    else:
+                        st.session_state["last_frame"] = frame_tmp.copy()
+                        st.session_state["display_frame"] = frame_tmp.copy()
+                        st.session_state["frozen"] = False
+                        st.session_state["frozen_frame"] = None
+                        st.session_state["camera_on"] = False
+                        st.session_state["cap"] = None
+                        st.session_state["last_error"] = None
+                        st.success("Frame capturado para ajuste de ROI.")
+                        st.rerun()
+
+            except Exception as e:
+                st.session_state["last_error"] = f"Erro ao capturar frame na Engenharia: {e}"
 # ==========================================================
 # Frame live (visualização) + assinatura p/ detecção de troca
 # ==========================================================

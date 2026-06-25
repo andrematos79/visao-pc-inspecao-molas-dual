@@ -1,4 +1,4 @@
-
+print("### CORE EDITADO ANDRE RODANDO ###", flush=True)
 # ==========================================================
 # SVC MOLAS - CORE INDUSTRIAL V1.6
 # Arquitetura estável do core terminal + inferência industrial v18
@@ -45,7 +45,7 @@ CAM_INDEX = 0
 SERIAL_PORT = "COM3"
 SERIAL_BAUD = 115200
 
-SETTLE_S = 0.30
+SETTLE_S = 0.90
 REARM_ZERO_REQUIRED = True
 # v8.1-fastline-fix: após sensor voltar para 0, aguarda e limpa buffer serial
 # para evitar que um PRESENT=1 antigo dispare foto da base vazia.
@@ -60,17 +60,17 @@ DEFAULT_THR_NG_OK = 0.45
 DEFAULT_THR_NG_NG = 0.60
 # v1.6.5: ESQ mantém bypass para desalinhamento; DIR fica mais conservador.
 # Motivo: v1.6.4 ficou estável e acertou mola ausente, mas gerou falsos NG_MISALIGNED no DIR.
-DEFAULT_THR_NG_NG_ESQ = 0.9995
-DEFAULT_THR_NG_OK_ESQ = 0.9900
-DEFAULT_THR_NG_NG_DIR = 0.85
-DEFAULT_THR_NG_OK_DIR = 0.60
+DEFAULT_THR_NG_NG_ESQ = 0.90
+DEFAULT_THR_NG_OK_ESQ = 0.75
+DEFAULT_THR_NG_NG_DIR = 0.60
+DEFAULT_THR_NG_OK_DIR = 0.45
 DEFAULT_NORMALIZE_LAB = True
 DEFAULT_TEMPORAL_N_FRAMES = 1
 DEFAULT_TEMPORAL_DELAY_MS = 25
 
 DEFAULT_ROI = {
-    "ESQ": {"x0": 8,  "x1": 35,  "y0": 10, "y1": 82},
-    "DIR": {"x0": 74, "x1": 100, "y0": 17, "y1": 83},
+    "ESQ": {"x0": 68,  "x1": 92, "y0": 0, "y1": 62},
+    "DIR": {"x0": 68, "x1": 92, "y0": 0, "y1": 62},
 }
 
 
@@ -135,12 +135,18 @@ def parse_serial_line(line: str):
 
 
 def load_config():
-    if CONFIG_PATH.exists():
-        try:
-            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {}
+    if not CONFIG_PATH.exists():
+        raise FileNotFoundError(f"config_molas.json não encontrado em: {CONFIG_PATH}")
+
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"ERRO no config_molas.json em {CONFIG_PATH}: {e}")
+
+    log(f"CONFIG carregado: {CONFIG_PATH.resolve()}")
+    log(f"ROI carregado: {cfg.get('roi', {})}")
+
+    return cfg
 
 
 def clamp01(v: float) -> float:
@@ -367,12 +373,16 @@ def infer_dual_on_frame_v18(frame_bgr, models: IndustrialModels, cfg: dict):
             # Motivo: em testes reais, a presença de mola ESQ ficou estável, mas o modelo
             # MobileNetV2 saturou p_ng_esq alto em praticamente todas as peças OK.
             # Mantemos a detecção de mola ausente no ESQ e o classificador de desalinhamento no DIR.
-            prob_ng_esq = 0.0
-            prob_ok_esq = 1.0
-            cls_mis_esq = "OK"
-            decision_band_esq = "LEFT_MISALIGN_BYPASS"
-            margin_esq = -1.0
-            attention_esq = False
+            _, prob_ng_esq, probs_mis_esq = infer_mobilenetv2_prod(
+                roi_esq_mis, models.prod_model, models.prod_class_names,
+                models.prod_pos_idx, thr_ng_ng_esq, img_size=models.prod_img_size
+            )
+
+            prob_ok_esq = float((probs_mis_esq or {}).get("OK", 1.0 - prob_ng_esq))
+
+            cls_mis_esq, decision_band_esq, margin_esq, attention_esq = decide_misaligned_status(
+                prob_ng_esq, prob_ok_esq, thr_ng_ok_esq, thr_ng_ng_esq, margin_abs=margin_abs
+            )
 
         if not missing_dir:
             _, prob_ng_dir, probs_mis_dir = infer_mobilenetv2_prod(
@@ -469,12 +479,12 @@ def merge_temporal(results):
     else:
         # v1.6.5: mantém ESQ como OK quando a mola está presente;
         # desalinhamento ESQ fica temporariamente desabilitado até recalibração/re-treino.
-        defect_esq = "OK"
-        decision_band_esq = "LEFT_MISALIGN_BYPASS"
-        margin_esq = -1.0
-        attention_esq = False
-        last["prob_ng_esq"] = 0.0
-        last["prob_ok_esq"] = 1.0
+        thr_ng_ok_esq = float(last.get("thr_ng_ok_esq", DEFAULT_THR_NG_OK_ESQ))
+        thr_ng_ng_esq = float(last.get("thr_ng_ng_esq", DEFAULT_THR_NG_NG_ESQ))
+
+        defect_esq, decision_band_esq, margin_esq, attention_esq = decide_misaligned_status(
+            last["prob_ng_esq"], last["prob_ok_esq"], thr_ng_ok_esq, thr_ng_ng_esq, margin_abs=margin_abs
+        )
 
     if missing_dir:
         defect_dir = "NG_MISSING"
